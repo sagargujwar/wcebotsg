@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     base_url: str = "https://your-college-website.edu"
     max_crawl_depth: int = 2
 
+    # Custom CA bundle (PEM) for scraping. Empty → certifi defaults.
+    # The college site serves a certificate without its intermediate, so the
+    # bundle (certifi + Sectigo intermediate) is required for TLS verification.
+    ssl_ca_bundle: str = ""
+
     # ── Storage ───────────────────────────────────────────────────────────────
     chroma_path: str = "./data/chroma_db"
     pdf_download_path: str = "./data/pdfs"

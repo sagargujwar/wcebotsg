@@ -26,7 +26,7 @@ Browser Widget (frontend/index.html)
          ├─ Similarity < 0.35 → "couldn't find that" (no LLM call)
          │
          ▼  Above threshold
-   LLM  (Gemini gemini-2.5-flash → retry → Groq llama-3.3-70b → graceful fail)
+   LLM  (Gemini gemini-3.8-flash 25s → Groq openai/gpt-oss-120b → graceful fail)
    Grounded system prompt: answer ONLY from context, cite sources
          │
          ▼
@@ -67,6 +67,9 @@ college-rag-chatbot/
 │   ├── test_scraper.py
 │   ├── test_retrieval.py
 │   └── test_chat_api.py
+├── certs/
+│   ├── ca-bundle.pem       # Custom CA bundle: certifi + Sectigo intermediate
+│   └── sectigo-dv-r36.pem  # The intermediate alone (see step 5 TLS note)
 ├── data/
 │   ├── chroma_db/       # ChromaDB persistent storage (git-ignored)
 │   └── pdfs/            # Downloaded PDFs (git-ignored)
@@ -100,11 +103,22 @@ redis-cli ping   # should reply PONG
 ```
 
 **Option B — Native Windows (Redis 7 for Windows):**
-Download and install from https://github.com/tporadowski/redis/releases
-Then run:
-```powershell
-redis-server
-```
+
+1. Download `Redis-7.4.9-Windows-x64-msys2-with-Service.zip` (or newer) from
+   https://github.com/redis-windows/redis-windows/releases
+2. Extract it somewhere stable, e.g. `C:\Users\<you>\Desktop\Redis` — don't move or
+   delete that folder later; the installed service points at it.
+3. In an **Admin PowerShell** opened inside that folder:
+   ```powershell
+   New-Item -ItemType Directory -Path C:\Redis\data -Force   # required — redis-server crashes at startup without it
+   .\RedisService.exe install --port 6379 --dir C:\Redis\data
+   Start-Service Redis
+   redis-cli ping   # should reply PONG
+   ```
+
+> Alternative: the **5.0.14.1 MSI** from https://github.com/tporadowski/redis/releases
+> installs a service with one click — but that project is unmaintained since 2022 and is
+> **Redis 5, not Redis 7**, despite older docs saying so.
 
 ### macOS
 ```bash
@@ -156,6 +170,7 @@ Edit `.env` and fill in:
 | `GROQ_API_KEY` | https://console.groq.com/keys (free) |
 | `BASE_URL` | Your college website URL |
 | `REDIS_URL` | `redis://localhost:6379/0` (default) |
+| `SSL_CA_BUNDLE` | `./certs/ca-bundle.pem` (default) — custom CA bundle; needed when the target site serves its certificate without the intermediate |
 
 **Getting free API keys:**
 - **Gemini**: Go to https://aistudio.google.com/apikey → Sign in with Google → Create API key. Free tier includes generous daily limits.
@@ -195,6 +210,12 @@ python scripts/refresh_kb.py
    ```
    This crawls the site, downloads PDFs, chunks text, embeds locally, and upserts into ChromaDB. It is idempotent — safe to re-run at any time.
 
+> **TLS note:** if the crawl fails with `SSLCertVerificationError ... certificate verify
+> failed` while the same URL opens fine in your browser, the server isn't sending its
+> intermediate certificate (common with Sectigo chains). `SSL_CA_BUNDLE=./certs/ca-bundle.pem`
+> — certifi's roots plus the intermediate from `http://crt.sectigo.com/SectigoPublicServerAuthenticationCADVR36.crt` —
+> fixes it. Rebuild the bundle the same way if the CA ever rotates its intermediate.
+
 ---
 
 ## 6 · Start the Backend
@@ -217,6 +238,11 @@ Useful endpoints:
 Open `frontend/index.html` directly in your browser. No web server needed.
 
 The widget POSTs to `http://localhost:8000` by default. To change the backend URL, edit the `API_BASE` constant at the top of the `<script>` block in `index.html`.
+
+> A `file://` page sends `Origin: null`, so `ALLOWED_ORIGINS` must include `null`
+> (the shipped default does). If the widget shows "Could not reach WCE Bot" while
+> `GET /health` works, add `null` to `ALLOWED_ORIGINS` in `.env` and **restart** the
+> backend — `.env` is only read at startup, and `uvicorn --reload` watches `.py` files only.
 
 ---
 
@@ -262,6 +288,11 @@ Add a line to refresh every day at 2 AM:
    - Arguments: `scripts/refresh_kb.py`
    - Start in: `C:\path\to\college-rag-chatbot`
 
+After the first run, check **Last Run Result** in Task Scheduler: `0x0` = success.
+Task output isn't logged by default — to see errors, run the same command manually.
+If the console shows a stale "Running" row after the job finished, press F5 to refresh
+the view; don't cancel it.
+
 ---
 
 ## 10 · Pointing at a Real College Site
@@ -279,7 +310,7 @@ Add a line to refresh every day at 2 AM:
 
 - API keys are read only from `.env` / environment — never hardcoded
 - `.env` is git-ignored; `.env.example` (no secrets) is committed
-- CORS restricted to `ALLOWED_ORIGINS` in `.env`
+- CORS restricted to `ALLOWED_ORIGINS` in `.env` (includes `null` so the local `file://` widget works)
 - All user input is length-checked and sanitised before prompt interpolation
 - No `eval`, no shell injection
 
@@ -289,8 +320,15 @@ Add a line to refresh every day at 2 AM:
 
 | Problem | Fix |
 |---|---|
-| `redis.exceptions.ConnectionError` | Start Redis first (`redis-server` or `brew services start redis`) |
+| `redis.exceptions.ConnectionError` | Start Redis first (`Start-Service Redis` on Windows, `redis-server` or `brew services start redis` elsewhere) |
 | `GEMINI_API_KEY not set` warning | Fill in `.env` — tests still pass without it |
 | `/chat` always returns "couldn't find" | Run `python scripts/refresh_kb.py` to populate ChromaDB first |
 | `fee_structure.pdf` skip message | Run `python tests/fixtures/generate_fixtures.py` |
 | Slow first request | SentenceTransformer model is loaded once on startup — subsequent requests are fast |
+| `SSLCertVerificationError ... certificate verify failed` (crawl gets 0 documents) | Site omits its intermediate cert — ensure `SSL_CA_BUNDLE=./certs/ca-bundle.pem` is set and the file exists (step 5) |
+| `404 ... model not found` / `model ... no longer available` | Providers rename models — update names in `app/llm.py` (currently `gemini-3.8-flash` and `openai/gpt-oss-120b`) |
+| Widget: "Could not reach WCE Bot" but `/health` is ok | `ALLOWED_ORIGINS` must include `null` for `file://` pages; restart the backend after editing `.env` |
+| `WinError 10013` starting uvicorn | Port 8000 already in use — find and stop it: `Get-NetTCPConnection -LocalPort 8000` |
+| Scheduled task `Last Run Result: 0x1` | Refresh failed silently — run `python scripts/refresh_kb.py` manually to see the error |
+| `python -m venv` → "Unable to copy venvlauncher.exe" | A process is using `.venv` (e.g. a running uvicorn) — stop it first, then retry |
+| First chat answer takes 4–30 s | Gemini latency from your network varies; Groq fallback covers timeouts, and answers are cached in Redis for 24 h |

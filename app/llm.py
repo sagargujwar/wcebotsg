@@ -4,16 +4,17 @@ app/llm.py
 LLM service with Gemini primary → Groq fallback logic.
 
 Fallback behaviour (as specified):
-  1. Call Gemini gemini-2.5-flash, timeout 10s.
-  2. On any exception: retry once (same provider).
-  3. On second failure: try Groq llama-3.3-70b-versatile.
-  4. On both failing: return a graceful unavailability string — never raise.
+  1. Call Gemini gemini-3.8-flash, timeout 25s (single attempt — responses from
+     this network routinely take 8–15s, so a tight budget with retries never helps).
+  2. On failure or timeout: try Groq openai/gpt-oss-120b (timeout 15s).
+  3. On both failing: return a graceful unavailability string — never raise.
 
 The system prompt is authored in full here (not delegated to config) because
 it is a core part of the application's grounding logic.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import textwrap
 from typing import List, Optional
@@ -21,6 +22,10 @@ from typing import List, Optional
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Real-world Gemini latency from this network is 8–15s even for trivial prompts;
+# the previous 10s cap (with 2 blocking retries) cut responses off mid-flight.
+_GEMINI_TIMEOUT_SECONDS = 25
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 # Written out in full as required. {context} is interpolated at call time.
@@ -91,7 +96,7 @@ class LLMService:
                 import google.generativeai as genai  # type: ignore
 
                 genai.configure(api_key=gemini_key)
-                self._gemini_client = genai.GenerativeModel("gemini-2.5-flash")
+                self._gemini_client = genai.GenerativeModel("gemini-3.8-flash")
                 logger.info("Gemini client initialised")
             except Exception as exc:
                 logger.warning("Gemini client init failed: %s", exc)
@@ -140,21 +145,27 @@ class LLMService:
     def _try_gemini(self, prompt: str) -> Optional[str]:
         if self._gemini_client is None:
             return None
-        for attempt in range(2):
-            try:
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(
-                        self._gemini_client.generate_content, prompt
-                    )
-                    result = future.result(timeout=10)
-                text = result.text.strip()
-                if text:
-                    logger.info("Gemini answered (attempt %d)", attempt + 1)
-                    return text
-            except Exception as exc:
-                logger.warning("Gemini attempt %d failed: %s", attempt + 1, exc)
+        # Manual executor (no `with`): on timeout we must NOT wait for the
+        # stranded call to finish, or the "timeout" costs the full call duration.
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(self._gemini_client.generate_content, prompt)
+            result = future.result(timeout=_GEMINI_TIMEOUT_SECONDS)
+            text = result.text.strip()
+            if text:
+                logger.info("Gemini answered")
+                return text
+            logger.warning("Gemini returned an empty response")
+        except Exception as exc:
+            # TimeoutError has an empty str() — fall back to the type name so
+            # the log line isn't blank.
+            logger.warning(
+                "Gemini failed (timeout=%ds): %s",
+                _GEMINI_TIMEOUT_SECONDS,
+                str(exc) or type(exc).__name__,
+            )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         return None
 
     def _try_groq(self, prompt: str) -> Optional[str]:
@@ -162,7 +173,7 @@ class LLMService:
             return None
         try:
             response = self._groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-120b",
                 messages=[{"role": "user", "content": prompt}],
                 timeout=15,
             )

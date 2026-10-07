@@ -48,9 +48,22 @@ def main() -> None:
     t_start = time.perf_counter()
 
     # ── Step 1: Crawl ─────────────────────────────────────────────────────────
+    ca_bundle: str = ""
+    if settings.ssl_ca_bundle.strip():
+        candidate = os.path.abspath(settings.ssl_ca_bundle.strip())
+        if os.path.isfile(candidate):
+            ca_bundle = candidate
+            logger.info("CA bundle: %s", ca_bundle)
+        else:
+            logger.warning(
+                "SSL_CA_BUNDLE not found (%s) — falling back to certifi defaults.",
+                candidate,
+            )
+
     scraper = CollegeScraper(
         base_url=settings.base_url,
         pdf_download_path=settings.pdf_download_path,
+        ca_bundle=ca_bundle or None,
     )
     docs = scraper.crawl(max_depth=settings.max_crawl_depth)
     logger.info("Crawled %d documents.", len(docs))

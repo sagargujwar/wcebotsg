@@ -48,12 +48,16 @@ class CollegeScraper:
         base_url: str,
         pdf_download_path: str = "./data/pdfs",
         session: Optional[requests.Session] = None,
+        ca_bundle: Optional[str] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.pdf_download_path = pdf_download_path
         os.makedirs(pdf_download_path, exist_ok=True)
 
         self._session = session or requests.Session()
+        if ca_bundle:
+            # Must be set before any request (robots.txt is fetched below).
+            self._session.verify = ca_bundle
         self._session.headers.update(
             {"User-Agent": "WCEBot-Scraper/1.0 (college info RAG crawler)"}
         )
