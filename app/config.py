@@ -57,7 +57,12 @@ class Settings(BaseSettings):
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     # Stored as a comma-separated string in .env, parsed into a list.
-    allowed_origins: str = "http://localhost,http://localhost:8000,http://127.0.0.1:8000"
+    # "null" covers the frontend opened directly as a file:// URL.
+    allowed_origins: str = (
+        "http://localhost,http://localhost:8000,http://127.0.0.1:8000,null"
+    )
+    # Regex for additional allowed origins (any localhost port, e.g. Live Server).
+    allowed_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 
     # ── Branding / fallback ───────────────────────────────────────────────────
     official_site_fallback_url: str = "https://your-college-website.edu"

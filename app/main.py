@@ -65,9 +65,14 @@ app = FastAPI(
 )
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
+# Exact origins come from ALLOWED_ORIGINS; the regex additionally allows any
+# localhost/127.0.0.1 port (file:// pages send Origin "null", which is matched
+# via allow_origins). Without this, serving the frontend from e.g. Live Server
+# (http://localhost:5500) is blocked by the browser with a CORS error.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list(),
+    allow_origin_regex=settings.allowed_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
