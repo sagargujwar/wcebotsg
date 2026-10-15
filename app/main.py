@@ -19,8 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.cache import RedisCache
+from app.categories import Category, expand_query, get_spec, threshold_for
 from app.config import get_settings
 from app.constants import NO_INFO_MESSAGE, UNAVAILABLE_MESSAGE
+from app.intent import IntentResult, QueryClassifier
 from app.llm import LLMService
 from app.models import ChatRequest, ChatResponse, ErrorResponse, HealthResponse
 from app.retrieval import ChromaRetriever
@@ -37,6 +39,12 @@ _cache: Optional[RedisCache] = None
 _retriever: Optional[ChromaRetriever] = None
 _llm: Optional[LLMService] = None
 _social: Optional[SocialService] = None
+_intent: Optional[QueryClassifier] = None
+
+# Baseline classification — used when no classifier is wired (tests, degraded
+# startup).  Reproduces the original pipeline exactly: no category, no boost,
+# global threshold, no rubric.
+_BASELINE_INTENT = IntentResult(category=Category.GENERAL, confidence=0.0, method="none")
 
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -44,13 +52,16 @@ _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialise heavyweight singletons once at startup."""
-    global _cache, _retriever, _llm, _social
+    global _cache, _retriever, _llm, _social, _intent
 
     logger.info("WCE Bot starting up …")
     _cache = RedisCache()
     _retriever = ChromaRetriever()
     _llm = LLMService()
     _social = SocialService()
+    # Reuse the retriever's already-loaded encoder for prototype scoring —
+    # no second embedding model in memory.
+    _intent = QueryClassifier(encoder=_retriever.get_encoder())
     logger.info(
         "WCE Bot ready. (YouTube feed: %s)",
         "enabled" if _social.enabled else "disabled — set YOUTUBE_CHANNEL_ID",
@@ -142,9 +153,11 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
       1. Validate input (handled by Pydantic model)
       2. Rate-limit check per client IP
       3. Redis cache lookup
-      4. Chroma vector search (+ optional live YouTube context)
-      5. Similarity threshold gate
-      6. LLM call with grounding system prompt
+      4. Query rewriting (abbreviation expansion) + intent classification
+         into the query taxonomy (app/categories.py, app/intent.py)
+      5. Chroma vector search with the predicted category (+ live YouTube
+         context); per-category similarity threshold gate
+      6. LLM call with grounding system prompt + category rubric
       7. Source URL injection — suppressed for "no information" replies
       8. Cache + return
     """
@@ -153,7 +166,7 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
 
     query = body.query
 
-    # Step 3 — Cache lookup
+    # Step 3 — Cache lookup (payload carries the category it was answered with)
     if _cache:
         cached = _cache.get(query)
         if cached:
@@ -162,10 +175,33 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
                 cached["source_url"] = None
             return ChatResponse(**cached, cached=True)
 
-    # Step 4 — Vector search + live social context
+    # Step 4 — Query rewriting + intent classification.
+    # The *expanded* query feeds both the classifier and retrieval (full forms
+    # of abbreviations improve embedding matches); the LLM and the UI still
+    # see the student's original wording.
+    search_query = expand_query(query)
+    if search_query != query:
+        logger.debug("Query expanded: %.80s → %.80s", query, search_query)
+
+    intent = _BASELINE_INTENT
+    if _intent:
+        intent = _intent.classify(search_query)
+    if intent.is_specific:
+        logger.info(
+            "Intent: %s (confidence %.2f, %s)",
+            intent.category.value,
+            intent.confidence,
+            intent.method,
+        )
+
+    # Step 5 — Vector search + live social context
     chunks = []
     if _retriever:
-        chunks = _retriever.search(query, settings.top_k)
+        chunks = _retriever.search(
+            search_query,
+            settings.top_k,
+            category=intent.category.value if intent.is_specific else None,
+        )
 
     if _social:
         social_chunks = _social.context_chunks(query)
@@ -173,34 +209,50 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
             logger.info("Adding %d live social chunk(s)", len(social_chunks))
             chunks = list(chunks) + social_chunks
 
-    # Step 5 — Similarity threshold gate
+    # Similarity threshold gate — global default unless the category overrides.
+    gate = threshold_for(intent.category, settings.similarity_threshold)
     best_score = max((c.get("score", 0.0) for c in chunks), default=0.0)
-    if not chunks or best_score < settings.similarity_threshold:
+    if not chunks or best_score < gate:
         logger.info(
-            "No relevant chunks (best score=%.3f) — returning fallback",
+            "No relevant chunks (best score=%.3f, gate=%.3f) — returning fallback",
             best_score,
+            gate,
         )
         # Out of scope / not in the KB: exact refusal, never a document link.
         return ChatResponse(answer=NO_INFO_MESSAGE, source_url=None, cached=False)
 
-    # Step 6 — LLM call
+    # Step 6 — LLM call (grounded prompt + category rubric)
     answer = UNAVAILABLE_MESSAGE
     if _llm:
-        answer = _llm.generate(query, chunks)
+        answer = _llm.generate(query, chunks, rubric=get_spec(intent.category).rubric or None)
 
-    # Step 7 — Source URL; suppressed for refusals
+    # Step 7 — Source URL; suppressed for refusals.  Chunks of the predicted
+    # category win ties because their scores were already boosted at retrieval
+    # time; this explicit preference covers unboosted edge cases too.
     source_url: Optional[str] = None
     if not _is_no_info(answer):
-        # Prefer the highest-scoring chunk that actually carries a URL (static
-        # informational chunks such as "no official X account" have none).
         with_url = [c for c in chunks if c.get("source_url")]
         if with_url:
-            top_chunk = max(with_url, key=lambda c: c.get("score", 0.0))
+            same_category = (
+                [c for c in with_url if c.get("category") == intent.category.value]
+                if intent.is_specific
+                else []
+            )
+            top_chunk = max(
+                same_category or with_url, key=lambda c: c.get("score", 0.0)
+            )
             source_url = top_chunk.get("source_url") or None
 
     # Step 8 — Cache response (only real answers — never errors or refusals,
     # so an improved KB/LLM is not masked by a stale "no info" for 24 h)
-    response_payload = {"answer": answer, "source_url": source_url}
+    category_out = intent.category.value if intent.is_specific else None
+    if _is_no_info(answer) or answer == UNAVAILABLE_MESSAGE:
+        category_out = None  # refusals/errors carry no category chip either
+    response_payload = {
+        "answer": answer,
+        "source_url": source_url,
+        "category": category_out,
+    }
     if (
         _cache
         and answer != UNAVAILABLE_MESSAGE
@@ -208,7 +260,12 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     ):
         _cache.set(query, response_payload)
 
-    return ChatResponse(answer=answer, source_url=source_url, cached=False)
+    return ChatResponse(
+        answer=answer,
+        source_url=source_url,
+        cached=False,
+        category=category_out,
+    )
 
 
 # ── Embeddable widget assets ─────────────────────────────────────────────────

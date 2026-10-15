@@ -299,3 +299,82 @@ class TestRerankChunks:
         urls = [c["source_url"] for c in out]
         assert "http://t.edu/b.pdf" not in urls
         assert len(set(urls)) == len(urls)
+
+
+class TestAssembleResults:
+    """Category-aware assembly: banded boost + uncorroborated fallback."""
+
+    @staticmethod
+    def _chunk(n: int, score: float, category: str = "") -> dict:
+        return {
+            "text": f"Detailed college document content number {n} with plenty of body text. " * 4,
+            "source_url": f"http://t.edu/page-{n}",
+            "doc_type": "html",
+            "title": f"Page {n}",
+            "category": category,
+            "score": score,
+        }
+
+    def test_empty_pool(self):
+        from app.retrieval import assemble_results
+
+        assert assemble_results([], top_k=4, category="admissions_fees") == []
+
+    def test_general_or_none_is_baseline(self):
+        from app.retrieval import _rerank_chunks, assemble_results
+
+        pool = [self._chunk(i, 0.9 - i * 0.01, "infra_campus") for i in range(8)]
+        baseline = _rerank_chunks(list(pool), top_k=4)
+        for cat in (None, "", "general"):
+            out = assemble_results(list(pool), top_k=4, category=cat)
+            assert [c["source_url"] for c in out] == [c["source_url"] for c in baseline]
+            assert [c["score"] for c in out] == [c["score"] for c in baseline]
+
+    def test_boost_promotes_matching_category_within_band(self):
+        from app.retrieval import assemble_results
+
+        pool = [
+            self._chunk(0, 0.50, "academics"),          # pool best
+            self._chunk(1, 0.47, "admissions_fees"),    # within 0.15 band
+            self._chunk(2, 0.46, "academics"),
+        ]
+        out = assemble_results(pool, top_k=3, category="admissions_fees")
+        assert out[0]["source_url"] == "http://t.edu/page-1"
+        assert out[0]["score"] == pytest.approx(0.47 + 0.06)
+
+    def test_boost_ignored_outside_band(self):
+        from app.retrieval import assemble_results
+
+        pool = [
+            self._chunk(0, 0.60, "academics"),
+            self._chunk(1, 0.30, "admissions_fees"),  # 0.30 gap > 0.15 band
+        ]
+        out = assemble_results(pool, top_k=2, category="admissions_fees")
+        assert out[0]["source_url"] == "http://t.edu/page-0"
+        assert out[1]["score"] == pytest.approx(0.30)  # untouched
+
+    def test_uncorroborated_category_falls_back_to_baseline(self):
+        from app.retrieval import _rerank_chunks, assemble_results
+
+        pool = [self._chunk(i, 0.5 - i * 0.01, "academics") for i in range(5)]
+        baseline = _rerank_chunks(list(pool), top_k=3)
+        out = assemble_results(list(pool), top_k=3, category="people_admin")
+        assert [c["source_url"] for c in out] == [c["source_url"] for c in baseline]
+        assert [c["score"] for c in out] == [c["score"] for c in baseline]
+
+    def test_untagged_chunks_never_boosted(self):
+        from app.retrieval import assemble_results
+
+        pool = [self._chunk(i, 0.4, "") for i in range(4)]
+        out = assemble_results(pool, top_k=4, category="notices_events")
+        assert all(c["score"] == pytest.approx(0.4) for c in out)
+
+    def test_boost_clamped_to_one(self):
+        from app.retrieval import assemble_results
+
+        pool = [
+            self._chunk(0, 0.99, "admissions_fees"),
+            self._chunk(1, 0.98, "admissions_fees"),
+        ]
+        out = assemble_results(pool, top_k=2, category="admissions_fees")
+        assert all(c["score"] <= 1.0 for c in out)

@@ -8,10 +8,12 @@ import logging
 import os
 import sys
 import time
+from collections import Counter
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from app.categories import Category, url_to_category
 from app.config import get_settings
 from app.retrieval import ChromaRetriever
 from scraper.chunker import TextChunker, _deterministic_id
@@ -65,6 +67,7 @@ def build_social_chunks(discovered: dict[str, str]) -> list[dict]:
             "title": f"WCE {platform}",
             "last_scraped_at": now,
             "chunk_index": 0,
+            "category": Category.GENERAL_INFO.value,
         })
     return chunks
 
@@ -128,6 +131,9 @@ def main() -> None:
     chunker = TextChunker()
     all_chunks: list[dict] = []
     for doc in docs:
+        # Tag every chunk of a document with its taxonomy category (URL-prefix
+        # match, falling back to a title lexicon — see app/categories.py).
+        category = url_to_category(doc["url"], doc["title"]).value
         chunks = chunker.chunk(
             text=doc["text"],
             source_url=doc["url"],
@@ -135,6 +141,8 @@ def main() -> None:
             title=doc["title"],
             last_scraped_at=doc["last_scraped_at"],
         )
+        for chunk in chunks:
+            chunk["category"] = category
         all_chunks.extend(chunks)
 
     logger.info("Generated %d chunks from %d documents.", len(all_chunks), len(docs))
@@ -165,10 +173,17 @@ def main() -> None:
         "title": chunk["title"],
         "last_scraped_at": chunk["last_scraped_at"],
         "chunk_index": chunk["chunk_index"],
+        "category": chunk.get("category", Category.GENERAL.value),
     } for chunk in all_chunks]
 
     logger.info("Upserting into ChromaDB …")
     retriever.upsert(ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas)
+
+    dist = Counter(m["category"] for m in metadatas)
+    logger.info(
+        "Category distribution: %s",
+        ", ".join(f"{c}={n}" for c, n in dist.most_common()),
+    )
 
     elapsed = time.perf_counter() - t_start
     logger.info("=" * 60)

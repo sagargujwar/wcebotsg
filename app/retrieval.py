@@ -17,6 +17,7 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 
+from app.categories import Category, boost_for
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,13 @@ _MAX_PER_SOURCE = 2        # max chunks per source_url in the final result
 _STUB_MAX_CHARS = 150      # shorter than this = page-header/footer fragment
 _STUB_WITH_ATTRS_MAX = 300  # … or short + signature boilerplate
 _STUB_PATTERN = re.compile(r"prepared by|checked by", re.IGNORECASE)
+
+# ── Category-aware retrieval (see assemble_results).
+# A chunk of the predicted category only receives its score boost when it is
+# within _BOOST_BAND of the pool's best raw score.  The prior therefore breaks
+# ties among *plausibly relevant* candidates instead of dragging a
+# same-category but topically distant chunk above genuinely relevant ones.
+_BOOST_BAND = 0.15
 
 
 def _is_stub(text: str) -> bool:
@@ -83,6 +91,57 @@ def _rerank_chunks(chunks: List[dict], top_k: int) -> List[dict]:
     return kept[:top_k]
 
 
+def _boost_amount(category: str) -> float:
+    """Boost for a category *value* string; unknown values boost nothing."""
+    try:
+        return boost_for(Category(category))
+    except ValueError:
+        return 0.0
+
+
+def assemble_results(pool: List[dict], top_k: int, category: Optional[str] = None) -> List[dict]:
+    """
+    Turn a raw, score-sorted candidate pool into the final top-k result.
+
+    Category-aware path (when *category* is a specific taxonomy value such as
+    ``"admissions_fees"``):
+      1. Chunks tagged with *category* get a small score boost — but only when
+         they sit within _BOOST_BAND of the pool's best raw score (the prior
+         breaks ties among plausibly-relevant candidates; it cannot promote
+         topically distant ones).
+      2. Re-sort and rerank as usual.
+      3. **Fallback**: if not a single chunk of *category* survived into the
+         result, the classifier's signal was uncorroborated by the pool —
+         return the exact baseline ranking instead, so a wrong category can
+         never score or order differently than the original pipeline.
+
+    ``None``, ``""`` and ``"general"`` select the baseline behaviour directly.
+    """
+    if not pool:
+        return []
+    if not category or category == "general":
+        return _rerank_chunks(pool, top_k)
+
+    best_raw = max(c.get("score", 0.0) for c in pool)
+    boost = _boost_amount(category)
+    boosted: List[dict] = []
+    for chunk in pool:
+        score = chunk.get("score", 0.0)
+        if (
+            chunk.get("category") == category
+            and (best_raw - score) <= _BOOST_BAND
+        ):
+            score = min(1.0, score + boost)
+        boosted.append({**chunk, "score": score})
+    boosted.sort(key=lambda c: c.get("score", 0.0), reverse=True)
+
+    result = _rerank_chunks(boosted, top_k)
+    if any(c.get("category") == category for c in result):
+        return result
+    # Uncorroborated signal → exact baseline.
+    return _rerank_chunks(pool, top_k)
+
+
 class ChromaRetriever:
     """Encapsulates embedding + Chroma similarity search."""
 
@@ -119,15 +178,29 @@ class ChromaRetriever:
 
     # ── Search ────────────────────────────────────────────────────────────────
 
-    def search(self, query: str, top_k: int) -> List[dict]:
+    def search(
+        self,
+        query: str,
+        top_k: int,
+        category: Optional[str] = None,
+    ) -> List[dict]:
         """
         Embed *query* and return the top-k most similar chunks.
+
+        Parameters
+        ----------
+        category:
+            Optional taxonomy value (e.g. ``"admissions_fees"``) from the
+            intent classifier.  Matching chunks receive a relevance-banded
+            score boost (see ``assemble_results``); ``None``/``"general"``
+            keeps the original baseline behaviour exactly.
 
         Each result dict contains:
             text        – the chunk body
             source_url  – where the chunk was scraped from
             doc_type    – "html" or "pdf"
             title       – page/document title
+            category    – taxonomy tag of the chunk ("" when untagged)
             score       – cosine similarity (0–1; higher = more similar)
         """
         if self._collection.count() == 0:
@@ -136,7 +209,8 @@ class ChromaRetriever:
 
         query_embedding = self._encoder.encode(query, normalize_embeddings=True).tolist()
 
-        # Over-fetch, then _rerank_chunks drops header/footer stubs and caps
+        # Over-fetch, then assemble_results category-boosts near-relevant
+        # matches and _rerank_chunks drops header/footer stubs and caps
         # per-source repeats so the LLM sees diverse, content-bearing chunks.
         pool = min(max(top_k * _POOL_MULTIPLIER, top_k), _POOL_MAX)
         results = self._collection.query(
@@ -160,11 +234,12 @@ class ChromaRetriever:
                     "source_url": meta.get("source_url", ""),
                     "doc_type": meta.get("doc_type", "html"),
                     "title": meta.get("title", ""),
+                    "category": meta.get("category", ""),
                     "score": score,
                 }
             )
 
-        return _rerank_chunks(chunks, top_k)
+        return assemble_results(chunks, top_k, category)
 
     # ── Upsert (used by refresh_kb.py) ───────────────────────────────────────
 

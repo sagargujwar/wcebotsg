@@ -33,6 +33,9 @@ class ChatResponse(BaseModel):
     answer: str
     source_url: Optional[str] = None
     cached: bool = False
+    # Taxonomy category the query was routed to ("admissions_fees", …).
+    # None when the classifier fell back to the baseline/general path.
+    category: Optional[str] = None
 
 
 class HealthResponse(BaseModel):

@@ -1,0 +1,79 @@
+{"id": "adm-01", "type": "answer", "category": "admissions_fees", "query": "What is the fee structure for B.E. first year?", "sources": ["fees-as-per-authorities", "Fee-Structure", "fee-structure"]}
+{"id": "adm-02", "type": "answer", "category": "admissions_fees", "query": "Which documents are required for CAP admission?", "sources": ["first-year-btech", "CAP-Reporting", "cap-reporting"]}
+{"id": "adm-03", "type": "answer", "category": "admissions_fees", "query": "What is the eligibility for direct second year B.Tech?", "sources": ["direct-second-year"]}
+{"id": "adm-04", "type": "answer", "category": "admissions_fees", "query": "How much is the hostel fee?", "sources": ["hostel", "Fee-Structure", "fees-as-per-authorities"]}
+{"id": "adm-05", "type": "answer", "category": "admissions_fees", "query": "Eligibility criteria for M.Tech admission", "sources": ["m-tech", "mtechadmissions", "post-graduate"]}
+{"id": "adm-06", "type": "answer", "category": "admissions_fees", "query": "Are NRI students eligible for admission?", "sources": ["pio-oci-fn-ciwg-nri", "first-year-btech"]}
+{"id": "adm-07", "type": "answer", "category": "admissions_fees", "query": "What scholarship is available for SC ST students?", "sources": ["student-scholarship", "scholarship"]}
+{"id": "adm-08", "type": "answer", "category": "admissions_fees", "query": "What is the last date for CAP reporting?", "sources": ["CAP-Reporting", "cap-reporting", "notice_board"]}
+{"id": "adm-09", "type": "answer", "category": "admissions_fees", "query": "How does the CAP round admission process work?", "sources": ["first-year-btech", "admissions"]}
+{"id": "adm-10", "type": "answer", "category": "admissions_fees", "query": "Is B.Des admission open now?", "sources": ["bachelor-of-design", "new-course"]}
+{"id": "acd-01", "type": "answer", "category": "academics", "query": "What is the syllabus of Computer Engineering?", "sources": ["department-of-computer", "Syllabus", "syllabus"]}
+{"id": "acd-02", "type": "answer", "category": "academics", "query": "List the subjects in second year mechanical engineering", "sources": ["department-of-mechanical", "Syllabus", "syllabus"]}
+{"id": "acd-03", "type": "answer", "category": "academics", "query": "What are the academic regulations?", "sources": ["academic-regulations"]}
+{"id": "acd-04", "type": "answer", "category": "academics", "query": "Where is the examination schedule?", "sources": ["examination-notices-and-schedule", "examination-notices"]}
+{"id": "acd-05", "type": "answer", "category": "academics", "query": "Explain the credit system and bank", "sources": ["credit-system"]}
+{"id": "acd-06", "type": "answer", "category": "academics", "query": "Which courses does the IT department offer?", "sources": ["department-of-information-technology"]}
+{"id": "acd-07", "type": "answer", "category": "academics", "query": "What is in the academic calendar?", "sources": ["calendars-and-schedules", "calendar"]}
+{"id": "acd-08", "type": "answer", "category": "academics", "query": "Is there a polytechnic diploma programme?", "sources": ["polytechnic", "diploma"]}
+{"id": "acd-09", "type": "answer", "category": "academics", "query": "What subjects are taught in B.Tech first year?", "sources": ["first-year-btech", "Sy-", "syllabus", "overview-of-programmes"]}
+{"id": "acd-10", "type": "answer", "category": "academics", "query": "Tell me about multi-disciplinary minor programmes", "sources": ["multi-disciplinary-minors"]}
+{"id": "acd-11", "type": "answer", "category": "academics", "query": "What is the academic philosophy of the college?", "sources": ["academic-philosophy"]}
+{"id": "acd-12", "type": "answer", "category": "academics", "query": "How many seats are there in the AI and ML course?", "sources": ["overview-of-programmes", "artificial-intelligence", "intake"]}
+{"id": "plc-01", "type": "answer", "category": "placements_careers", "query": "What are the placement statistics?", "sources": ["placement-in-wce", "student-careers"]}
+{"id": "plc-02", "type": "answer", "category": "placements_careers", "query": "Which companies visit the campus for placement?", "sources": ["placement-in-wce", "student-careers"]}
+{"id": "plc-03", "type": "answer", "category": "placements_careers", "query": "Does the college provide internships?", "sources": ["internships", "student-careers"]}
+{"id": "plc-04", "type": "answer", "category": "placements_careers", "query": "How do I register with the Career Development Cell?", "sources": ["career-development-cell"]}
+{"id": "plc-05", "type": "answer", "category": "placements_careers", "query": "What higher education options do students go for?", "sources": ["higher-education"]}
+{"id": "plc-06", "type": "answer", "category": "placements_careers", "query": "Tell me about the entrepreneurship cell", "sources": ["iie-cell", "entrepreneurship"]}
+{"id": "plc-07", "type": "answer", "category": "placements_careers", "query": "Are there training programmes for placements?", "sources": ["trainings", "career-development-cell"]}
+{"id": "plc-08", "type": "answer", "category": "placements_careers", "query": "How does the college engage its alumni?", "sources": ["alumni-engagement", "distinguished-alumni"]}
+{"id": "plc-09", "type": "answer", "category": "placements_careers", "query": "Are there internships in industry collaboration?", "sources": ["industry-partnerships", "internships"]}
+{"id": "ppl-01", "type": "answer", "category": "people_admin", "query": "Who is the Director of the college?", "sources": ["/about/director", "director"]}
+{"id": "ppl-02", "type": "answer", "category": "people_admin", "query": "What is the contact number of the office?", "sources": ["communication", "contact"]}
+{"id": "ppl-03", "type": "answer", "category": "people_admin", "query": "List the heads of departments", "sources": ["heads-and-deans"]}
+{"id": "ppl-04", "type": "answer", "category": "people_admin", "query": "What is the email address for admission queries?", "sources": ["communication", "contact"]}
+{"id": "ppl-05", "type": "answer", "category": "people_admin", "query": "Is there a faculty recruitment notification?", "sources": ["ecruitment", "Advt", "apply-for-faculty"]}
+{"id": "ppl-06", "type": "answer", "category": "people_admin", "query": "Tell me about the college committees", "sources": ["college-committees"]}
+{"id": "ppl-07", "type": "answer", "category": "people_admin", "query": "Who are the members of the Academic Council?", "sources": ["academic-council", "Academic-Council"]}
+{"id": "ppl-08", "type": "answer", "category": "people_admin", "query": "What is the designation of the Deputy Director?", "sources": ["deputy-director"]}
+{"id": "ppl-09", "type": "answer", "category": "people_admin", "query": "Who is the head of the Mechanical Engineering department?", "sources": ["department-of-mechanical", "heads-and-deans"]}
+{"id": "inf-01", "type": "answer", "category": "infra_campus", "query": "What are the hostel facilities?", "sources": ["hostel"]}
+{"id": "inf-02", "type": "answer", "category": "infra_campus", "query": "Is Wi-Fi available on campus?", "sources": ["campus-network", "wifi"]}
+{"id": "inf-03", "type": "answer", "category": "infra_campus", "query": "What books and journals are in the library?", "sources": ["books-and-journals", "library"]}
+{"id": "inf-04", "type": "answer", "category": "infra_campus", "query": "What sports facilities are there?", "sources": ["sports-activities", "sports"]}
+{"id": "inf-05", "type": "answer", "category": "infra_campus", "query": "Which clubs can students join?", "sources": ["student-clubs"]}
+{"id": "inf-06", "type": "answer", "category": "infra_campus", "query": "What are the reading room services?", "sources": ["reading-room"]}
+{"id": "inf-07", "type": "answer", "category": "infra_campus", "query": "Tell me about the academic buildings on campus", "sources": ["academic-buildings", "campus-life"]}
+{"id": "inf-08", "type": "answer", "category": "infra_campus", "query": "Is there a canteen in the college?", "sources": ["canteen"]}
+{"id": "ntc-01", "type": "answer", "category": "notices_events", "query": "What are the latest notices?", "sources": ["notice_board", "/notices"]}
+{"id": "ntc-02", "type": "answer", "category": "notices_events", "query": "Any new announcements from the college?", "sources": ["notice_board", "/notices"]}
+{"id": "ntc-03", "type": "answer", "category": "notices_events", "query": "Show me the notice board updates", "sources": ["notice_board"]}
+{"id": "ntc-04", "type": "answer", "category": "notices_events", "query": "Which FDP workshops are being conducted?", "sources": ["fdp", "notice_board"]}
+{"id": "ntc-05", "type": "answer", "category": "notices_events", "query": "What is the latest news about the college?", "sources": ["news-archive", "blogs"]}
+{"id": "ntc-06", "type": "answer", "category": "notices_events", "query": "Is M.Tech admission 2026 open? Any notice?", "sources": ["m-tech-admission", "mtechadmissions", "notice_board"]}
+{"id": "ntc-07", "type": "answer", "category": "notices_events", "query": "Is there a new course announced this year?", "sources": ["new-course", "notice_board"]}
+{"id": "rch-01", "type": "answer", "category": "research", "query": "What research projects are funded by DST?", "sources": ["dst-funded", "research-consultancy"]}
+{"id": "rch-02", "type": "answer", "category": "research", "query": "How many patents has the college filed?", "sources": ["patents", "research-consultancy"]}
+{"id": "rch-03", "type": "answer", "category": "research", "query": "Is there a PhD programme at the college?", "sources": ["admissions/phd", "phd"]}
+{"id": "rch-04", "type": "answer", "category": "research", "query": "List the MoUs with industries", "sources": ["mous", "centre-of-excellences", "research-consultancy"]}
+{"id": "rch-05", "type": "answer", "category": "research", "query": "Tell me about the R&D cell", "sources": ["rd-cell", "research-consultancy"]}
+{"id": "rch-06", "type": "answer", "category": "research", "query": "Are student publications encouraged?", "sources": ["student-publications", "research-consultancy"]}
+{"id": "gen-01", "type": "answer", "category": "general_info", "query": "What is the vision and mission of the college?", "sources": ["vision-mission"]}
+{"id": "gen-02", "type": "answer", "category": "general_info", "query": "When was the college established?", "sources": ["wce-at-glance", "vision-mission"]}
+{"id": "gen-03", "type": "answer", "category": "general_info", "query": "What is the NIRF ranking of the college?", "sources": ["nirf", "NIRF"]}
+{"id": "gen-04", "type": "answer", "category": "general_info", "query": "Is the college NAAC accredited?", "sources": ["naac", "NAAC"]}
+{"id": "gen-05", "type": "answer", "category": "general_info", "query": "What is the official Instagram handle?", "sources": ["instagram.com"]}
+{"id": "gen-06", "type": "answer", "category": "people_admin", "query": "What is the college address?", "sources": ["communication", "walchandsangli.ac.in"]}
+{"id": "gen-07", "type": "answer", "category": "general_info", "query": "What approvals does the college have from UGC?", "sources": ["UGC-Approval", "ugc-aicte"]}
+{"id": "gen-08", "type": "answer", "category": "general_info", "query": "Tell me about Walchand Trust", "sources": ["walchand-trust", "mte-society"]}
+{"id": "ref-01", "type": "refuse", "category": "general", "query": "What is the capital of France?", "sources": []}
+{"id": "ref-02", "type": "refuse", "category": "general", "query": "Who won the cricket world cup?", "sources": []}
+{"id": "ref-03", "type": "refuse", "category": "general", "query": "Write a poem on rain", "sources": []}
+{"id": "ref-04", "type": "refuse", "category": "general", "query": "How do I cook pasta?", "sources": []}
+{"id": "ref-05", "type": "refuse", "category": "general", "query": "What is the weather in Tokyo tomorrow?", "sources": []}
+{"id": "ref-06", "type": "refuse", "category": "general", "query": "Translate this sentence to French", "sources": []}
+{"id": "ref-07", "type": "refuse", "category": "general", "query": "Who is the CEO of Apple?", "sources": []}
+{"id": "ref-08", "type": "refuse", "category": "general", "query": "What is 2 + 2?", "sources": []}
+{"id": "ref-09", "type": "refuse", "category": "general", "query": "Tell me a joke", "sources": []}
+{"id": "ref-10", "type": "refuse", "category": "general", "query": "Which is the best smartphone to buy?", "sources": []}

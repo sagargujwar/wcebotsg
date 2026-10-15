@@ -18,6 +18,8 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.constants import NO_INFO_MESSAGE  # noqa: E402
+from app.categories import Category, get_spec  # noqa: E402
+from app.intent import IntentResult  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -80,6 +82,21 @@ def _make_mock_social(chunks=None, intent=False):
     return mock
 
 
+def _make_mock_intent(result=None):
+    """Classifier mock.  Default = GENERAL (the baseline pipeline)."""
+    mock = MagicMock()
+    mock.classify.return_value = result or IntentResult(
+        category=Category.GENERAL, confidence=0.0, method="none"
+    )
+    return mock
+
+
+def _intent_for(category: Category, confidence: float = 0.8) -> IntentResult:
+    return IntentResult(
+        category=category, confidence=confidence, method="hybrid"
+    )
+
+
 SOCIAL_CHUNKS = [
     {
         "text": (
@@ -105,6 +122,7 @@ def _make_client(
     retriever=None,
     llm=None,
     social=None,
+    intent=None,
 ):
     """
     Create a TestClient with mocked singletons injected into app.main's globals.
@@ -115,11 +133,13 @@ def _make_client(
     retriever = retriever or _make_mock_retriever()
     llm = llm or _make_mock_llm()
     social = social or _make_mock_social()
+    intent = intent or _make_mock_intent()
 
     main_module._cache = cache
     main_module._retriever = retriever
     main_module._llm = llm
     main_module._social = social
+    main_module._intent = intent
 
     return TestClient(main_module.app, raise_server_exceptions=False)
 
@@ -360,6 +380,158 @@ class TestChatEndpoint:
         resp = client.post("/chat", json={"query": "fee PDF"})
         assert resp.status_code == 200
         assert resp.json()["source_url"] == "http://test.edu/fee_structure.pdf"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Category-aware (taxonomy) behaviour
+# ─────────────────────────────────────────────────────────────────────────────
+
+MARGINAL_CHUNKS = [
+    {
+        "text": "Notice: college events and circulars for students, dated this week. " * 3,
+        "source_url": "http://test.edu/notices",
+        "doc_type": "html",
+        "title": "Notice Board",
+        "score": 0.32,
+    }
+]
+
+
+class TestCategoryAwareChat:
+    def test_specific_category_returned_in_response(self):
+        client = _make_client(
+            intent=_make_mock_intent(_intent_for(Category.ADMISSIONS_FEES))
+        )
+        resp = client.post("/chat", json={"query": "What is the fee structure?"})
+        assert resp.status_code == 200
+        assert resp.json()["category"] == "admissions_fees"
+
+    def test_baseline_fallback_has_no_category(self):
+        client = _make_client()
+        resp = client.post("/chat", json={"query": "What is the fee structure?"})
+        assert resp.status_code == 200
+        assert resp.json()["category"] is None
+
+    def test_classifier_sees_expanded_query_and_search_gets_category(self):
+        intent = _make_mock_intent(_intent_for(Category.PEOPLE_ADMIN))
+        retriever = _make_mock_retriever()
+        client = _make_client(intent=intent, retriever=retriever)
+        resp = client.post("/chat", json={"query": "Who is the HOD of IT?"})
+        assert resp.status_code == 200
+
+        classified = intent.classify.call_args[0][0]
+        assert "head of department" in classified  # abbreviation expanded
+
+        search_call = retriever.search.call_args
+        assert search_call[0][0] == classified          # same expanded query
+        assert search_call[1]["category"] == "people_admin"
+
+    def test_general_route_sends_no_category_to_retrieval(self):
+        retriever = _make_mock_retriever()
+        client = _make_client(retriever=retriever)  # default intent = GENERAL
+        client.post("/chat", json={"query": "something vague"})
+        assert retriever.search.call_args[1]["category"] is None
+
+    def test_per_category_threshold_admits_marginal_score(self):
+        """0.32 < global 0.35 but ≥ notices gate 0.30 → answered, not refused."""
+        mock_llm = _make_mock_llm(answer="The latest notice is dated 12 Sept.")
+        client = _make_client(
+            retriever=_make_mock_retriever(chunks=MARGINAL_CHUNKS),
+            llm=mock_llm,
+            intent=_make_mock_intent(_intent_for(Category.NOTICES_EVENTS)),
+        )
+        resp = client.post("/chat", json={"query": "any new notices?"})
+        assert resp.status_code == 200
+        assert resp.json()["answer"].startswith("The latest notice")
+        mock_llm.generate.assert_called_once()
+
+    def test_global_threshold_still_gates_general_queries(self):
+        """Same 0.32 score must refuse when the classifier fell back to general."""
+        mock_llm = _make_mock_llm()
+        client = _make_client(
+            retriever=_make_mock_retriever(chunks=MARGINAL_CHUNKS),
+            llm=mock_llm,
+        )
+        resp = client.post("/chat", json={"query": "any new notices?"})
+        assert resp.json()["answer"] == NO_INFO_MESSAGE
+        mock_llm.generate.assert_not_called()
+
+    def test_category_rubric_passed_to_llm(self):
+        mock_llm = _make_mock_llm()
+        client = _make_client(
+            llm=mock_llm,
+            intent=_make_mock_intent(_intent_for(Category.ADMISSIONS_FEES)),
+        )
+        client.post("/chat", json={"query": "What is the fee?"})
+        assert (
+            mock_llm.generate.call_args[1]["rubric"]
+            == get_spec(Category.ADMISSIONS_FEES).rubric
+        )
+
+    def test_no_rubric_for_general(self):
+        mock_llm = _make_mock_llm()
+        client = _make_client(llm=mock_llm)
+        client.post("/chat", json={"query": "What is the fee?"})
+        assert mock_llm.generate.call_args[1]["rubric"] is None
+
+    def test_source_url_prefers_matching_category(self):
+        chunks = [
+            {
+                "text": "Academic regulation text with enough content. " * 4,
+                "source_url": "http://test.edu/academics",
+                "doc_type": "html",
+                "title": "Regulations",
+                "score": 0.90,
+                "category": "academics",
+            },
+            {
+                "text": "Fee structure table text with enough content. " * 4,
+                "source_url": "http://test.edu/fees",
+                "doc_type": "html",
+                "title": "Fees",
+                "score": 0.75,
+                "category": "admissions_fees",
+            },
+        ]
+        client = _make_client(
+            retriever=_make_mock_retriever(chunks=chunks),
+            intent=_make_mock_intent(_intent_for(Category.ADMISSIONS_FEES)),
+        )
+        resp = client.post("/chat", json={"query": "What is the fee?"})
+        assert resp.json()["source_url"] == "http://test.edu/fees"
+
+    def test_category_stored_in_cache_payload(self):
+        mock_cache = _make_mock_cache()
+        client = _make_client(
+            cache=mock_cache,
+            intent=_make_mock_intent(_intent_for(Category.ACADEMICS)),
+        )
+        client.post("/chat", json={"query": "syllabus of semester 5"})
+        payload = mock_cache.set.call_args[0][1]
+        assert payload["category"] == "academics"
+
+    def test_refusal_carries_no_category(self):
+        mock_llm = _make_mock_llm(answer=NO_INFO_MESSAGE)
+        client = _make_client(
+            llm=mock_llm,
+            intent=_make_mock_intent(_intent_for(Category.ADMISSIONS_FEES)),
+        )
+        resp = client.post("/chat", json={"query": "some fee detail not in KB"})
+        data = resp.json()
+        assert data["answer"] == NO_INFO_MESSAGE
+        assert data["category"] is None
+        assert data["source_url"] is None
+
+    def test_cached_category_surfaced(self):
+        cached = {
+            "answer": "Research answer.",
+            "source_url": "http://test.edu/rd",
+            "category": "research",
+        }
+        client = _make_client(cache=_make_mock_cache(cached_response=cached))
+        resp = client.post("/chat", json={"query": "any patents?"})
+        assert resp.json()["cached"] is True
+        assert resp.json()["category"] == "research"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

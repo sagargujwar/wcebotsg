@@ -60,6 +60,7 @@ _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent(
     8. If the student asks for a document or a direct link, refer them to the source_url
        in the context rather than constructing a URL yourself.
 
+    {rubric}
     Context (retrieved from college documents):
     ─────────────────────────────────────────────
     {context}
@@ -70,8 +71,13 @@ _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent(
 _UNAVAILABLE = UNAVAILABLE_MESSAGE
 
 
-def _build_prompt(context_chunks: List[dict]) -> str:
-    """Combine retrieved chunks into the context string for the system prompt."""
+def _build_prompt(context_chunks: List[dict], rubric: Optional[str] = None) -> str:
+    """Combine retrieved chunks into the context string for the system prompt.
+
+    *rubric* is the category-specific guidance from ``app/categories.py``
+    (answer shape + guardrails), interpolated as a normal format value —
+    only the template itself is parsed for placeholders.
+    """
     parts = []
     for i, chunk in enumerate(context_chunks, 1):
         parts.append(
@@ -80,8 +86,16 @@ def _build_prompt(context_chunks: List[dict]) -> str:
             f"    Content: {chunk.get('text', '')}"
         )
     context = "\n\n".join(parts)
+    rubric_block = ""
+    if rubric and rubric.strip():
+        rubric_block = (
+            "Additional guidance for this category of question:\n"
+            f"{rubric.strip()}\n\n"
+        )
     return _SYSTEM_PROMPT_TEMPLATE.format(
-        context=context, no_info_message=NO_INFO_MESSAGE
+        context=context,
+        no_info_message=NO_INFO_MESSAGE,
+        rubric=rubric_block,
     )
 
 
@@ -125,13 +139,21 @@ class LLMService:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def generate(self, query: str, context_chunks: List[dict]) -> str:
+    def generate(
+        self,
+        query: str,
+        context_chunks: List[dict],
+        rubric: Optional[str] = None,
+    ) -> str:
         """
         Generate an answer grounded in *context_chunks*.
 
+        *rubric* is optional category-specific guidance appended to the
+        grounded system prompt (see app/categories.py).
+
         Never raises — returns a graceful string on total failure.
         """
-        system_prompt = _build_prompt(context_chunks)
+        system_prompt = _build_prompt(context_chunks, rubric=rubric)
         full_prompt = f"{system_prompt}\n\nStudent question: {query}"
 
         # 1 — Try Gemini (up to 2 attempts)
