@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     base_url: str = "https://your-college-website.edu"
     max_crawl_depth: int = 2
 
+    # Safety cap for long crawls: stop after this many documents (0 = unlimited).
+    # High by default so a normal depth-3 crawl is never truncated, but a
+    # pathological link explosion (?page=… loops etc.) can't run for days.
+    max_pages: int = 20000
+
     # Custom CA bundle (PEM) for scraping. Empty → certifi defaults.
     # The college site serves a certificate without its intermediate, so the
     # bundle (certifi + Sectigo intermediate) is required for TLS verification.
@@ -43,7 +48,7 @@ class Settings(BaseSettings):
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
     similarity_threshold: float = 0.35
-    top_k: int = 4
+    top_k: int = 6
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     rate_limit_requests: int = 20
@@ -66,6 +71,21 @@ class Settings(BaseSettings):
 
     # ── Branding / fallback ───────────────────────────────────────────────────
     official_site_fallback_url: str = "https://your-college-website.edu"
+
+    # ── Social media ──────────────────────────────────────────────────────────
+    # YouTube channel ID (the "UC…" id) used for keyless RSS feed lookups.
+    # Empty → YouTube feed integration is disabled (static links still work).
+    youtube_channel_id: str = ""
+
+    # ── Demo proxy ────────────────────────────────────────────────────────────
+    # Port served by scripts/demo_proxy.py (local mirror of the college site
+    # with the floating chat widget injected).
+    demo_proxy_port: int = 9000
+
+    # Origin of this backend used when building the widget snippet URL
+    # (<script src="<widget_api_base>/widget.js">). Override if the API is
+    # served behind another host/port.
+    widget_api_base: str = "http://localhost:8000"
 
     @field_validator("similarity_threshold")
     @classmethod

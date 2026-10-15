@@ -20,6 +20,7 @@ import textwrap
 from typing import List, Optional
 
 from app.config import get_settings
+from app.constants import NO_INFO_MESSAGE, UNAVAILABLE_MESSAGE
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +40,24 @@ _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent(
     Rules you must follow without exception:
     1. Answer ONLY from the provided context. Do not use any prior knowledge, do not infer,
        do not guess, and do not hallucinate facts.
-    2. If the context does not contain enough information to fully answer the question, say exactly:
-       "I don't have that information in the college's published documents."
-       Do not attempt to fill gaps with general knowledge.
-    3. Always cite which source document you used by mentioning its title or URL at the end
-       of your answer (e.g., "Source: <title or URL>").
-    4. Be concise and student-friendly. Prefer bullet points for structured information such as
+    2. The context may include the college's official social-media links (Instagram, Facebook,
+       LinkedIn, YouTube) and, when available, a list of recent YouTube videos. You may answer
+       questions about those social-media accounts using that context, including the links.
+    3. Some retrieved chunks may be irrelevant to the question — ignore them and answer
+       using the relevant ones. Only when NO chunk contains information relevant to the
+       question, reply with EXACTLY this sentence and nothing else: "{no_info_message}"
+       Do not add a Source line, extra words, or an explanation when you reply this way.
+    4. If the question is not about this college (out of scope — for example general knowledge,
+       other institutions, opinions, jokes, or unrelated tasks), reply with EXACTLY this
+       sentence and nothing else: "{no_info_message}"
+    5. When you do answer a question from the context, cite which source document you used by
+       mentioning its title or URL at the end of your answer (e.g., "Source: <title or URL>").
+       Rules 3 and 4 override this rule — refusal replies carry no Source line.
+    6. Be concise and student-friendly. Prefer bullet points for structured information such as
        fee tables, syllabus lists, exam schedules, and admission criteria.
-    5. Never make up fees, dates, deadlines, contact details, or admission criteria —
-       even if you believe you know the answer from training data.
-    6. If the student asks for a document or a direct link, refer them to the source_url
+    7. Never make up fees, dates, deadlines, contact details, admission criteria, or social
+       accounts — even if you believe you know the answer from training data.
+    8. If the student asks for a document or a direct link, refer them to the source_url
        in the context rather than constructing a URL yourself.
 
     Context (retrieved from college documents):
@@ -58,10 +67,7 @@ _SYSTEM_PROMPT_TEMPLATE = textwrap.dedent(
     """
 )
 
-_UNAVAILABLE = (
-    "I'm sorry, the WCE Bot service is temporarily unavailable. "
-    "Please try again in a few moments."
-)
+_UNAVAILABLE = UNAVAILABLE_MESSAGE
 
 
 def _build_prompt(context_chunks: List[dict]) -> str:
@@ -74,7 +80,9 @@ def _build_prompt(context_chunks: List[dict]) -> str:
             f"    Content: {chunk.get('text', '')}"
         )
     context = "\n\n".join(parts)
-    return _SYSTEM_PROMPT_TEMPLATE.format(context=context)
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        context=context, no_info_message=NO_INFO_MESSAGE
+    )
 
 
 class LLMService:

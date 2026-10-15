@@ -17,6 +17,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from app.constants import NO_INFO_MESSAGE  # noqa: E402
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Mock singletons injected before the app is imported
@@ -70,6 +72,29 @@ def _make_mock_llm(answer=GENERATED_ANSWER):
     return mock
 
 
+def _make_mock_social(chunks=None, intent=False):
+    mock = MagicMock()
+    mock.enabled = True
+    mock.context_chunks.return_value = chunks if chunks is not None else []
+    mock.matches_intent.return_value = intent
+    return mock
+
+
+SOCIAL_CHUNKS = [
+    {
+        "text": (
+            "Latest videos from the official WCE Sangli YouTube channel:\n"
+            "[1] Campus tour 2026 — https://www.youtube.com/watch?v=abc123 "
+            "(published 2026-01-05)"
+        ),
+        "source_url": "https://www.youtube.com/channel/UCtest",
+        "doc_type": "social",
+        "title": "WCE YouTube — latest videos",
+        "score": 1.0,
+    }
+]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Client factory
 # ─────────────────────────────────────────────────────────────────────────────
@@ -79,6 +104,7 @@ def _make_client(
     cache=None,
     retriever=None,
     llm=None,
+    social=None,
 ):
     """
     Create a TestClient with mocked singletons injected into app.main's globals.
@@ -88,10 +114,12 @@ def _make_client(
     cache = cache or _make_mock_cache()
     retriever = retriever or _make_mock_retriever()
     llm = llm or _make_mock_llm()
+    social = social or _make_mock_social()
 
     main_module._cache = cache
     main_module._retriever = retriever
     main_module._llm = llm
+    main_module._social = social
 
     return TestClient(main_module.app, raise_server_exceptions=False)
 
@@ -146,7 +174,7 @@ class TestChatEndpoint:
         resp = client.post("/chat", json={})
         assert resp.status_code == 422
 
-    # ── Similarity threshold gate ─────────────────────────────────────────────
+    # ── Similarity threshold gate / out-of-scope ─────────────────────────────
 
     def test_low_similarity_returns_fallback_no_llm(self):
         mock_llm = _make_mock_llm()
@@ -157,7 +185,8 @@ class TestChatEndpoint:
         resp = client.post("/chat", json={"query": "nonsense xyzzy 12345"})
         assert resp.status_code == 200
         data = resp.json()
-        assert "couldn't find" in data["answer"].lower() or "check" in data["answer"].lower()
+        assert data["answer"] == NO_INFO_MESSAGE
+        assert data["source_url"] is None
         # LLM must NOT have been called
         mock_llm.generate.assert_not_called()
 
@@ -169,7 +198,96 @@ class TestChatEndpoint:
         )
         resp = client.post("/chat", json={"query": "anything"})
         assert resp.status_code == 200
+        data = resp.json()
+        assert data["answer"] == NO_INFO_MESSAGE
+        assert data["source_url"] is None
         mock_llm.generate.assert_not_called()
+
+    def test_out_of_scope_llm_refusal_has_no_source_url(self):
+        """Even when retrieval passes the gate, a refusal must hide View Document."""
+        mock_llm = _make_mock_llm(answer=NO_INFO_MESSAGE)
+        client = _make_client(llm=mock_llm)
+        resp = client.post("/chat", json={"query": "capital of France"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["answer"] == NO_INFO_MESSAGE
+        assert data["source_url"] is None
+
+    def test_wrapped_refusal_still_hides_source_url(self):
+        """LLM refusals wrapped in quotes/dashes still suppress the link."""
+        mock_llm = _make_mock_llm(answer=f'"{NO_INFO_MESSAGE}"')
+        client = _make_client(llm=mock_llm)
+        resp = client.post("/chat", json={"query": "tell me a joke"})
+        assert resp.status_code == 200
+        assert resp.json()["source_url"] is None
+
+    def test_llm_refusal_is_not_cached(self):
+        """Refusals must not be cached — an improved KB/LLM applies immediately."""
+        mock_llm = _make_mock_llm(answer=NO_INFO_MESSAGE)
+        mock_cache = _make_mock_cache()
+        client = _make_client(llm=mock_llm, cache=mock_cache)
+        resp = client.post("/chat", json={"query": "capital of France"})
+        assert resp.status_code == 200
+        assert resp.json()["answer"] == NO_INFO_MESSAGE
+        mock_cache.set.assert_not_called()
+
+    def test_cached_refusal_still_hides_source_url(self):
+        """A cached refusal never resurrects an old source link."""
+        cached_payload = {
+            "answer": NO_INFO_MESSAGE,
+            "source_url": "http://test.edu/old-doc",
+        }
+        client = _make_client(cache=_make_mock_cache(cached_response=cached_payload))
+        resp = client.post("/chat", json={"query": "who is the PM"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["cached"] is True
+        assert data["answer"] == NO_INFO_MESSAGE
+        assert data["source_url"] is None
+
+    # ── Live social (YouTube) context ────────────────────────────────────────
+
+    def test_social_chunks_injected_for_video_query(self):
+        """Live YouTube chunks reach the LLM and win the source URL."""
+        mock_llm = _make_mock_llm()
+        client = _make_client(
+            retriever=_make_mock_retriever(chunks=[]),  # nothing in the KB
+            llm=mock_llm,
+            social=_make_mock_social(chunks=SOCIAL_CHUNKS, intent=True),
+        )
+        resp = client.post("/chat", json={"query": "latest youtube videos"})
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # LLM was called with the social chunk in context
+        mock_llm.generate.assert_called_once()
+        passed_chunks = mock_llm.generate.call_args[0][1]
+        assert any("Campus tour 2026" in c["text"] for c in passed_chunks)
+        # The social chunk supplies the source link
+        assert data["source_url"] == "https://www.youtube.com/channel/UCtest"
+
+    def test_no_social_chunks_when_service_returns_none(self):
+        client = _make_client(social=_make_mock_social(chunks=[]))
+        resp = client.post("/chat", json={"query": "latest youtube videos"})
+        assert resp.status_code == 200
+        assert resp.json()["answer"] == GENERATED_ANSWER
+
+    # ── Widget endpoints ─────────────────────────────────────────────────────
+
+    def test_widget_panel_served(self):
+        client = _make_client()
+        resp = client.get("/widget")
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        assert "chat-container" in resp.text
+
+    def test_widget_script_served(self):
+        client = _make_client()
+        resp = client.get("/widget.js")
+        assert resp.status_code == 200
+        assert "javascript" in resp.headers["content-type"]
+        assert "wcebot-fab" in resp.text
+        assert "/widget" in resp.text
 
     # ── Cache ─────────────────────────────────────────────────────────────────
 

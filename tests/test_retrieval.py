@@ -167,3 +167,135 @@ class TestChromaRetriever:
 
     def test_ping_returns_true(self, retriever):
         assert retriever.ping() is True
+
+
+class TestUpsertBatching:
+    """Regression: Chroma rejects a single upsert above max batch size (≈5461)."""
+
+    @staticmethod
+    def _fake_retriever():
+        from app.retrieval import ChromaRetriever
+
+        fake = MagicMock(spec=ChromaRetriever)
+        fake._collection = MagicMock()
+        return fake
+
+    def test_large_upsert_is_sliced(self):
+        from app.retrieval import ChromaRetriever
+
+        fake = self._fake_retriever()
+        n = 10_001
+        ChromaRetriever.upsert(
+            fake,
+            ids=[f"id-{i}" for i in range(n)],
+            documents=["text"] * n,
+            embeddings=[[0.1, 0.2]] * n,
+            metadatas=[{"source_url": "http://test.edu"}] * n,
+        )
+        calls = fake._collection.upsert.call_args_list
+        sizes = [len(c.kwargs["ids"]) for c in calls]
+        assert sizes == [4000, 4000, 2001]
+        assert all(s <= 5461 for s in sizes)
+        # All parallel lists stay aligned within each batch
+        for c in calls:
+            assert len(c.kwargs["documents"]) == len(c.kwargs["ids"])
+            assert len(c.kwargs["embeddings"]) == len(c.kwargs["ids"])
+            assert len(c.kwargs["metadatas"]) == len(c.kwargs["ids"])
+
+    def test_small_upsert_is_single_call(self):
+        from app.retrieval import ChromaRetriever
+
+        fake = self._fake_retriever()
+        ChromaRetriever.upsert(
+            fake,
+            ids=["a", "b", "c"],
+            documents=["x", "y", "z"],
+            embeddings=[[0.0]] * 3,
+            metadatas=[{}, {}, {}],
+        )
+        fake._collection.upsert.assert_called_once()
+
+
+class TestRerankChunks:
+    """Query-time reranking: drop PDF header/footer stubs, cap per-source repeats."""
+
+    @staticmethod
+    def _chunk(url: str, text: str, score: float):
+        return {
+            "text": text,
+            "source_url": url,
+            "doc_type": "pdf",
+            "title": "t",
+            "score": score,
+        }
+
+    def test_is_stub_detects_header_fragments(self):
+        from app.retrieval import _is_stub
+
+        assert _is_stub("Syllabus Prepared By Dr. X | Syllabus Checked By HOD")  # 53 chars
+        assert _is_stub(
+            "Syllabus Prepared By Dr. A. A. Mohite and Dr. B. N. Jamadar. "
+            "Syllabus Checked By Head of Department. "  # < 300 with attrs
+        )
+        assert not _is_stub("A" * 150)  # long, no attrs → content
+        assert not _is_stub(
+            "Detailed syllabus with course codes, credits and assessment " * 4
+        )
+
+    def test_stubs_dropped_in_favour_of_content(self):
+        from app.retrieval import _rerank_chunks
+
+        stub = self._chunk("http://t.edu/a.pdf", "Syllabus Prepared By X", 0.90)
+        content = self._chunk(
+            "http://t.edu/b.pdf",
+            "Detailed course contents with subject names, credits and " * 5,
+            0.80,
+        )
+        out = _rerank_chunks([stub, content], top_k=1)
+        assert out == [content]
+
+    def test_per_source_cap(self):
+        from app.retrieval import _rerank_chunks
+
+        chunks = [
+            self._chunk("http://t.edu/a.pdf", f"Real content chunk {i} " * 20, 0.9 - i * 0.01)
+            for i in range(3)
+        ] + [
+            self._chunk("http://t.edu/b.pdf", "Other content chunk x " * 20, 0.85),
+            self._chunk("http://t.edu/b.pdf", "Other content chunk y " * 20, 0.84),
+        ]
+        out = _rerank_chunks(chunks, top_k=4)
+        urls = [c["source_url"] for c in out]
+        assert urls.count("http://t.edu/a.pdf") == 2
+        assert urls.count("http://t.edu/b.pdf") == 2
+
+    def test_backfill_when_pool_is_all_stubs(self):
+        from app.retrieval import _rerank_chunks
+
+        chunks = [
+            self._chunk(f"http://t.edu/{i}.pdf", "Syllabus Checked By Y", 0.9 - i * 0.01)
+            for i in range(8)
+        ]
+        out = _rerank_chunks(chunks, top_k=4)
+        assert len(out) == 4
+        assert out[0]["score"] >= out[-1]["score"]  # score order kept
+
+    def test_short_pool_returned_unchanged(self):
+        from app.retrieval import _rerank_chunks
+
+        chunks = [self._chunk("http://t.edu/a.pdf", "Syllabus Prepared By", 0.9)]
+        assert _rerank_chunks(chunks, top_k=6) == chunks
+
+    def test_duplicate_text_from_different_urls_dropped(self):
+        from app.retrieval import _rerank_chunks
+
+        body = "Identical NAAC report paragraph about courses and credits. " * 10
+        chunks = [
+            self._chunk("http://t.edu/a.pdf", body, 0.90),
+            self._chunk("http://t.edu/b.pdf", body, 0.89),  # same text, other URL
+            self._chunk("http://t.edu/c.pdf", body + " extra content here " * 10, 0.88),
+        ]
+        out = _rerank_chunks(chunks, top_k=2)
+        urls = [c["source_url"] for c in out]
+        assert "http://t.edu/b.pdf" not in urls
+        assert len(set(urls)) == len(urls)

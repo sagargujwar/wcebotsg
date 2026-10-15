@@ -1,0 +1,35 @@
+{
+  "description": "Official WCE Sangli social-media profiles. Ingested into the knowledge base by scripts/refresh_kb.py as one retrievable chunk per entry (doc_type 'social'). Verified against the college website footer and official accounts; update when profiles change.",
+  "entries": [
+    {
+      "platform": "Instagram",
+      "handle": "@wcesangli",
+      "url": "https://www.instagram.com/wcesangli/",
+      "description": "Official Instagram account of Walchand College of Engineering, Sangli — campus life, events, notices and student activities."
+    },
+    {
+      "platform": "Facebook",
+      "handle": "Walchand College of Engineering Sangli",
+      "url": "https://www.facebook.com/walchandcollegeofengineeringsangli",
+      "description": "Official Facebook page of Walchand College of Engineering, Sangli — announcements, news and events."
+    },
+    {
+      "platform": "LinkedIn",
+      "handle": "Walchand College of Engineering",
+      "url": "https://www.linkedin.com/school/walchandcollegeofengineering/",
+      "description": "Official LinkedIn company page of Walchand College of Engineering, Sangli — placements, achievements and professional updates."
+    },
+    {
+      "platform": "YouTube",
+      "handle": "Media WCE",
+      "url": "https://www.youtube.com/@mediawce",
+      "description": "Media WCE — YouTube channel of Walchand College of Engineering, Sangli, for educational videos and institute information."
+    },
+    {
+      "platform": "X (Twitter)",
+      "handle": "",
+      "url": "",
+      "description": "The official WCE website lists Facebook, Instagram, LinkedIn and YouTube as the college's social-media channels. No X (Twitter) account is listed as official, so do not link to unverified accounts."
+    }
+  ]
+}

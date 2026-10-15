@@ -11,17 +11,20 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.cache import RedisCache
 from app.config import get_settings
+from app.constants import NO_INFO_MESSAGE, UNAVAILABLE_MESSAGE
 from app.llm import LLMService
 from app.models import ChatRequest, ChatResponse, ErrorResponse, HealthResponse
 from app.retrieval import ChromaRetriever
+from app.social import SocialService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,18 +36,25 @@ logger = logging.getLogger(__name__)
 _cache: Optional[RedisCache] = None
 _retriever: Optional[ChromaRetriever] = None
 _llm: Optional[LLMService] = None
+_social: Optional[SocialService] = None
+
+_FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialise heavyweight singletons once at startup."""
-    global _cache, _retriever, _llm
+    global _cache, _retriever, _llm, _social
 
     logger.info("WCE Bot starting up …")
     _cache = RedisCache()
     _retriever = ChromaRetriever()
     _llm = LLMService()
-    logger.info("WCE Bot ready.")
+    _social = SocialService()
+    logger.info(
+        "WCE Bot ready. (YouTube feed: %s)",
+        "enabled" if _social.enabled else "disabled — set YOUTUBE_CHANNEL_ID",
+    )
 
     yield
 
@@ -105,6 +115,18 @@ async def _check_rate_limit(request: Request) -> None:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+def _is_no_info(answer: str) -> bool:
+    """
+    True when *answer* is the standard "no information" refusal.
+
+    The LLM is instructed to reply with NO_INFO_MESSAGE only, but it may wrap
+    it in quotes or add whitespace — normalise before comparing so the source
+    link is suppressed either way.
+    """
+    normalised = answer.strip().strip("\"'“”‘’").lstrip("-–—: ").strip()
+    return normalised.startswith(NO_INFO_MESSAGE)
+
+
 @app.post(
     "/chat",
     response_model=ChatResponse,
@@ -120,10 +142,10 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
       1. Validate input (handled by Pydantic model)
       2. Rate-limit check per client IP
       3. Redis cache lookup
-      4. Chroma vector search
+      4. Chroma vector search (+ optional live YouTube context)
       5. Similarity threshold gate
       6. LLM call with grounding system prompt
-      7. PDF source URL injection
+      7. Source URL injection — suppressed for "no information" replies
       8. Cache + return
     """
     # Step 2 — Rate limit
@@ -136,50 +158,85 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
         cached = _cache.get(query)
         if cached:
             logger.info("Cache HIT for query: %.60s", query)
+            if _is_no_info(cached.get("answer", "")):
+                cached["source_url"] = None
             return ChatResponse(**cached, cached=True)
 
-    # Step 4 — Vector search
+    # Step 4 — Vector search + live social context
     chunks = []
     if _retriever:
         chunks = _retriever.search(query, settings.top_k)
 
+    if _social:
+        social_chunks = _social.context_chunks(query)
+        if social_chunks:
+            logger.info("Adding %d live social chunk(s)", len(social_chunks))
+            chunks = list(chunks) + social_chunks
+
     # Step 5 — Similarity threshold gate
-    if not chunks or chunks[0]["score"] < settings.similarity_threshold:
+    best_score = max((c.get("score", 0.0) for c in chunks), default=0.0)
+    if not chunks or best_score < settings.similarity_threshold:
         logger.info(
             "No relevant chunks (best score=%.3f) — returning fallback",
-            chunks[0]["score"] if chunks else 0.0,
+            best_score,
         )
-        fallback_answer = (
-            "I couldn't find that in the college's published documents — "
-            f"you can check {settings.official_site_fallback_url} directly."
-        )
-        return ChatResponse(answer=fallback_answer, source_url=None, cached=False)
+        # Out of scope / not in the KB: exact refusal, never a document link.
+        return ChatResponse(answer=NO_INFO_MESSAGE, source_url=None, cached=False)
 
     # Step 6 — LLM call
-    answer = _UNAVAILABLE_MSG
+    answer = UNAVAILABLE_MESSAGE
     if _llm:
         answer = _llm.generate(query, chunks)
 
-    # Step 7 — Inject PDF source URL when the top chunk is a PDF
-    top_chunk = chunks[0]
+    # Step 7 — Source URL; suppressed for refusals
     source_url: Optional[str] = None
-    if top_chunk.get("doc_type") == "pdf":
-        source_url = top_chunk.get("source_url") or None
-    else:
-        source_url = top_chunk.get("source_url") or None
+    if not _is_no_info(answer):
+        # Prefer the highest-scoring chunk that actually carries a URL (static
+        # informational chunks such as "no official X account" have none).
+        with_url = [c for c in chunks if c.get("source_url")]
+        if with_url:
+            top_chunk = max(with_url, key=lambda c: c.get("score", 0.0))
+            source_url = top_chunk.get("source_url") or None
 
-    # Step 8 — Cache response (only non-error answers)
+    # Step 8 — Cache response (only real answers — never errors or refusals,
+    # so an improved KB/LLM is not masked by a stale "no info" for 24 h)
     response_payload = {"answer": answer, "source_url": source_url}
-    if _cache and answer != _UNAVAILABLE_MSG:
+    if (
+        _cache
+        and answer != UNAVAILABLE_MESSAGE
+        and not _is_no_info(answer)
+    ):
         _cache.set(query, response_payload)
 
     return ChatResponse(answer=answer, source_url=source_url, cached=False)
 
 
-_UNAVAILABLE_MSG = (
-    "I'm sorry, the WCE Bot service is temporarily unavailable. "
-    "Please try again in a few moments."
+# ── Embeddable widget assets ─────────────────────────────────────────────────
+
+@app.get(
+    "/widget",
+    summary="Chat panel for the floating widget iframe",
+    response_class=FileResponse,
 )
+async def widget_panel() -> FileResponse:
+    """Serve the chat UI — loaded inside the widget's <iframe>."""
+    return FileResponse(_FRONTEND_DIR / "index.html", media_type="text/html")
+
+
+@app.get(
+    "/widget.js",
+    summary="Floating chat button embed loader",
+    response_class=FileResponse,
+)
+async def widget_script() -> FileResponse:
+    """
+    Serve the one-line embed script. Host pages include it as:
+
+        <script src="http://localhost:8000/widget.js" defer></script>
+    """
+    return FileResponse(
+        _FRONTEND_DIR / "widget.js", media_type="application/javascript"
+    )
 
 
 @app.get(

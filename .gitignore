@@ -34,3 +34,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Runtime logs / pids (uvicorn, demo proxy, KB refresh)
+*.log
+*.pid

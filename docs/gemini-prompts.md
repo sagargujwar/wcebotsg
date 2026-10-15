@@ -3,6 +3,12 @@
 Prompts used to redesign `frontend/index.html` into a professional, refined-dark chat UI.
 Model: **Gemini 3.8 Flash Medium** (Google Antigravity, free tier).
 
+> **Note:** these prompts are historical — the redesign is already applied. Two
+> later changes are NOT in the prompts below and must survive any re-run: the
+> source link label is **`📄 View Document`** (not "View source document"), and
+> it must only render when `source_url` is non-null (never for the
+> "I don't have information about this." refusal).
+
 Pick ONE strategy below — do not mix them.
 
 | Strategy | When to use |
@@ -167,7 +173,7 @@ KEEP THESE BEHAVIORS EXACTLY (reuse the logic):
     if (!response.ok) { const detail = data.detail || `Error ${response.status}`; if (response.status === 429) showError("⏱ Rate limit reached — please wait a moment before asking again."); else if (response.status === 400) showError("⚠ " + detail); else showError("Something went wrong. Please try again."); appendErrorBubble(query); return; }
     renderBotAnswer(data, elapsedMs);
   } catch (err) { console.error(err); showError("🔌 Could not reach WCE Bot. Make sure the backend is running."); appendErrorBubble(query); } finally { setLoading(false); }
-- renderBotAnswer(data, elapsedMs): const {answer, source_url, cached} = data; let html = `<p>${escapeHtml(answer).replace(/\n/g,"<br>")}</p>`; if (source_url) html += `<a class="source-link" href="${escapeAttr(source_url)}" target="_blank" rel="noopener noreferrer">📄 View source document</a>`; if (cached || typeof elapsedMs === "number") { html += `<div class="badge-row">`; if (cached) html += `<span class="cached-badge">⚡ Cached response</span>`; if (typeof elapsedMs === "number") { const secs = elapsedMs/1000; const label = secs < 10 ? `${secs.toFixed(2)}s` : `${secs.toFixed(1)}s`; html += `<span class="response-time-badge">⏱ Responded in ${label}</span>`; } html += `</div>`; html += `<div class="msg-actions"><button type="button" class="action-btn" onclick="copyBubble(this)">⧉ Copy</button></div>`; appendMessage("bot", html, true); }
+- renderBotAnswer(data, elapsedMs): const {answer, source_url, cached} = data; let html = `<p>${escapeHtml(answer).replace(/\n/g,"<br>")}</p>`; if (source_url) html += `<a class="source-link" href="${escapeAttr(source_url)}" target="_blank" rel="noopener noreferrer">📄 View Document</a>`; if (cached || typeof elapsedMs === "number") { html += `<div class="badge-row">`; if (cached) html += `<span class="cached-badge">⚡ Cached response</span>`; if (typeof elapsedMs === "number") { const secs = elapsedMs/1000; const label = secs < 10 ? `${secs.toFixed(2)}s` : `${secs.toFixed(1)}s`; html += `<span class="response-time-badge">⏱ Responded in ${label}</span>`; } html += `</div>`; html += `<div class="msg-actions"><button type="button" class="action-btn" onclick="copyBubble(this)">⧉ Copy</button></div>`; appendMessage("bot", html, true); }
 
 NEW FUNCTIONS (declare with `function` so inline onclick resolves):
 - now(): Date → "HH:MM" zero-padded 24h.
@@ -344,6 +350,6 @@ Strategy A never approaches the output cap (edits ≤200 lines each). Strategy B
 ## Verification (after any strategy)
 
 1. `node --check` on the extracted `<script>` block
-2. `pytest -q` → expect **45 passed** (backend must be untouched)
+2. `pytest -q` → expect **117 passed** (backend must be untouched)
 3. Open `frontend/index.html` via `file://` with the `uvicorn --reload` server running, then test: send message, timestamp shown, Copy, Retry, Clear chat, char counter (warn/full), skeleton loader, cached + response-time badges, mobile width
 4. `git diff --stat` — only `frontend/index.html` should appear (no commit unless asked)

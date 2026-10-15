@@ -689,7 +689,7 @@
   <div id="messages" role="log" aria-label="Chat messages" aria-live="polite">
     <div class="message bot" id="welcome-msg">
       <div class="bubble">
-        👋 Hello! I'm <strong>WCE Bot</strong> — ask me about fees, syllabus, admissions or exams, all from official college documents.<br>
+        👋 Hello! I'm <strong>WCE Bot</strong> — ask me about fees, syllabus, admissions, exams or official social media, all from official college sources.<br>
         <em>What would you like to know?</em>
       </div>
     </div>
@@ -730,7 +730,7 @@
   <div id="input-area">
     <textarea
       id="query-input"
-      placeholder="Ask about fees, syllabus, admissions…"
+      placeholder="Ask about fees, syllabus, social media…"
       rows="1"
       maxlength="500"
       aria-label="Type your question"
@@ -867,15 +867,22 @@
   }
 
   // ── Render bot answer ──────────────────────────────────────────────────────
+  const NO_INFO_PREFIX = "I don't have information about this.";
+
+  function isNoInfoAnswer(answer) {
+    return answer.trim().replace(/^["'\u201c\u2019\u201d]+/, "").startsWith(NO_INFO_PREFIX);
+  }
+
   function renderBotAnswer(data, elapsedMs) {
     const { answer, source_url, cached } = data;
 
     let html = `<p>${escapeHtml(answer).replace(/\n/g, "<br>")}</p>`;
 
-    if (source_url) {
+    // "View Document" only for real answers — never for the no-info refusal
+    if (source_url && !isNoInfoAnswer(answer)) {
       html += `
         <a class="source-link" href="${escapeAttr(source_url)}" target="_blank" rel="noopener noreferrer">
-          📄 View source document
+          📄 View Document
         </a>`;
     }
 

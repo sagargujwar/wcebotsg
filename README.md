@@ -19,19 +19,22 @@ Browser Widget (frontend/index.html)
          ├─ Redis cache lookup (normalised query hash)
          │       └─ HIT  → return {answer, source_url, cached: true}
          │
-         ▼  MISS
-   ChromaDB search  (all-MiniLM-L6-v2, local, no API)
-   Retrieve top-4 most similar chunks
-         │
-         ├─ Similarity < 0.35 → "couldn't find that" (no LLM call)
-         │
-         ▼  Above threshold
-   LLM  (Gemini gemini-3.8-flash 25s → Groq openai/gpt-oss-120b → graceful fail)
-   Grounded system prompt: answer ONLY from context, cite sources
-         │
-         ▼
-   Inject PDF source_url if top chunk is a PDF
-   Write to Redis cache (TTL 24 h)
+    ▼  MISS
+    ChromaDB search  (all-MiniLM-L6-v2, local, no API)
+    Retrieve top-6 most similar chunks
+           │
+           ├─ + live YouTube feed context when the question is about videos
+           │
+           ├─ Similarity < 0.35 → "I don't have information about this." (no LLM call)
+           │
+           ▼  Above threshold
+    LLM  (Gemini gemini-3.8-flash 25s → Groq openai/gpt-oss-120b → graceful fail)
+    Grounded system prompt: answer ONLY from context, cite sources;
+    out-of-scope / missing info → "I don't have information about this."
+           │
+           ▼
+     Source URL injected — suppressed when the answer is the no-info refusal
+     Write to Redis cache (TTL 24 h; refusals are never cached)
          │
          ▼
    Return {answer, source_url, cached: false}
@@ -44,19 +47,28 @@ Browser Widget (frontend/index.html)
 ```
 college-rag-chatbot/
 ├── app/
-│   ├── main.py          # FastAPI app, routes, rate limiting
+│   ├── main.py          # FastAPI app, routes, rate limiting, widget endpoints
 │   ├── config.py        # pydantic-settings (reads .env)
+│   ├── constants.py     # the exact "I don't have information about this." reply
 │   ├── retrieval.py     # ChromaDB search + SentenceTransformer
 │   ├── llm.py           # Gemini + Groq calls, fallback, system prompt
+│   ├── social.py        # live YouTube RSS context (keyless, cached)
 │   ├── cache.py         # Redis wrapper + rate-limit counters
 │   └── models.py        # Pydantic request/response schemas
 ├── scraper/
-│   ├── scraper.py       # BFS HTML crawler + PDF downloader
+│   ├── scraper.py       # BFS HTML crawler + PDF downloader + social links
 │   └── chunker.py       # Paragraph-boundary chunker with overlap
 ├── scripts/
-│   └── refresh_kb.py    # End-to-end pipeline (crawl → chunk → embed → upsert)
+│   ├── refresh_kb.py    # End-to-end pipeline (crawl → chunk → embed → upsert)
+│   └── demo_proxy.py    # Local college-site mirror with the widget injected
+├── static_docs/
+│   └── social_media.json  # Official social profiles → ingested into the KB
 ├── frontend/
-│   └── index.html       # Embeddable chat widget (plain HTML/CSS/JS)
+│   ├── index.html       # Chat UI (standalone page + widget iframe panel)
+│   └── widget.js        # Floating-button embed loader for host pages
+├── docs/
+│   ├── project-explanation.md  # Architecture & design deep-dive
+│   └── gemini-prompts.md       # Prompts used for the UI redesign
 ├── tests/
 │   ├── fixtures/
 │   │   ├── index.html         # Mock college homepage
@@ -66,6 +78,8 @@ college-rag-chatbot/
 │   ├── conftest.py
 │   ├── test_scraper.py
 │   ├── test_retrieval.py
+│   ├── test_social.py
+│   ├── test_cors.py
 │   └── test_chat_api.py
 ├── certs/
 │   ├── ca-bundle.pem       # Custom CA bundle: certifi + Sectigo intermediate
@@ -171,6 +185,9 @@ Edit `.env` and fill in:
 | `BASE_URL` | Your college website URL |
 | `REDIS_URL` | `redis://localhost:6379/0` (default) |
 | `SSL_CA_BUNDLE` | `./certs/ca-bundle.pem` (default) — custom CA bundle; needed when the target site serves its certificate without the intermediate |
+| `YOUTUBE_CHANNEL_ID` | Pre-filled with WCE's official channel `UCkWEgeBCY5U6sl7jS9YShwA` (Media WCE) — enables live YouTube-feed answers; set empty to disable |
+| `WIDGET_API_BASE` | `http://localhost:8000` — origin used in the widget embed snippet |
+| `DEMO_PROXY_PORT` | `9000` — port for the local college-site demo mirror |
 
 **Getting free API keys:**
 - **Gemini**: Go to https://aistudio.google.com/apikey → Sign in with Google → Create API key. Free tier includes generous daily limits.
@@ -229,6 +246,8 @@ The API is now available at `http://localhost:8000`.
 Useful endpoints:
 - `POST /chat` — main query endpoint
 - `GET /health` — service status
+- `GET /widget` — chat panel HTML (loaded inside the floating widget's iframe)
+- `GET /widget.js` — floating-button embed loader
 - `GET /docs` — interactive Swagger UI
 
 ---
@@ -246,25 +265,97 @@ The widget POSTs to `http://localhost:8000` by default. To change the backend UR
 
 ---
 
-## 8 · Run Tests
+## 8 · Floating Chat Widget (embed on any site)
+
+Add the chatbot to any page with **one line**:
+
+```html
+<script src="http://localhost:8000/widget.js" defer></script>
+```
+
+The script injects a floating action button (bottom-right). Clicking it opens
+the chat panel **on the same screen** as an overlay — no navigation, no popup.
+The panel is an `<iframe>` served from `GET /widget`, so `/chat` is
+same-origin for the iframe and the host page's CSS can't break the UI.
+
+- Backend must be running (`uvicorn app.main:app`).
+- Backend on a different host/port:
+  `<script src="https://cdn.example.com/widget.js" data-api="http://localhost:8000" defer></script>`
+- A page served over **https** needs the backend on https too (browsers block
+  active mixed content).
+
+### Demo it on the college site (no site access needed)
+
+`BASE_URL` (e.g. `https://walchandsangli.ac.in/`) is a live site we don't
+control, so a local proxy mirrors it and injects the snippet:
+
+```bash
+python scripts/demo_proxy.py     # mirrors BASE_URL and injects widget.js
+# open http://localhost:9000
+```
+
+You see the real college page **with the floating WCE Bot button**; clicking
+it opens the chat overlay without leaving the page. Change the port with
+`DEMO_PROXY_PORT` in `.env`.
+
+---
+
+## 9 · Social Media Answers
+
+- **Static profiles** — `static_docs/social_media.json` lists the official
+  accounts (Instagram, Facebook, LinkedIn, YouTube). `refresh_kb.py` ingests
+  **one chunk per platform** with `source_url` set to the profile URL, so
+  "What is WCE's Instagram?" answers with the official link. The crawler also
+  captures social links found on crawled pages and adds any platform missing
+  from the JSON. Re-run `python scripts/refresh_kb.py` after changing the file.
+- **Live YouTube feed** — `.env` ships with `YOUTUBE_CHANNEL_ID` set to WCE's
+  official channel (**Media WCE**, `UCkWEgeBCY5U6sl7jS9YShwA`). Questions like
+  "latest WCE videos" then include the 5 newest videos from YouTube's **keyless
+  RSS feed** (8 s timeout, cached 15 minutes; verified live — recent uploads
+  with titles, dates, and watch links). To use another channel, open it →
+  View Page Source → search `channelId`, or take the `youtube.com/channel/UC…`
+  URL. Set the variable empty to disable — static links still work.
+- Instagram/Facebook/X have no keyless feeds (their APIs require registered
+  apps or paid tiers), so their links are static KB content instead.
+
+---
+
+## 10 · Out-of-Scope Questions
+
+Anything out of scope or missing from the sources gets the exact reply:
+
+> **I don't have information about this.**
+
+…with **no "View Document" link** — the backend returns `source_url: null`
+for every refusal (threshold-gate fallback and LLM refusal alike), and the
+frontend double-checks before rendering the link. Refusals are also **never
+written to the Redis cache**, so a later KB refresh is never masked by a
+stale "no info" answer.
+
+---
+
+## 11 · Run Tests
 
 ```bash
 pytest tests/ -v
 ```
 
-All tests pass without any real API keys or a running Redis instance.
-The `test_pdf_extracted` test is automatically skipped if the PDF fixture hasn't been generated.
+117 tests — all passing, without any real API keys or a running Redis instance.
+The `test_pdf_text_extracted` and `test_missing_content_type_sniffs_pdf` tests are
+automatically skipped if the PDF fixture hasn't been generated.
 
 To run a specific test file:
 ```bash
 pytest tests/test_chat_api.py -v
 pytest tests/test_scraper.py -v
 pytest tests/test_retrieval.py -v
+pytest tests/test_social.py -v
+pytest tests/test_cors.py -v
 ```
 
 ---
 
-## 9 · Schedule Automatic KB Refresh (Cron)
+## 12 · Schedule Automatic KB Refresh (Cron)
 
 The knowledge base should be refreshed periodically as the college website updates.
 
@@ -295,7 +386,7 @@ the view; don't cancel it.
 
 ---
 
-## 10 · Pointing at a Real College Site
+## 13 · Pointing at a Real College Site
 
 1. Set `BASE_URL` in `.env` to the college homepage (e.g. `https://walchandsangli.ac.in`)
 2. Adjust `MAX_CRAWL_DEPTH` (1–3 recommended; higher = more pages but slower)
@@ -328,6 +419,8 @@ the view; don't cancel it.
 | `SSLCertVerificationError ... certificate verify failed` (crawl gets 0 documents) | Site omits its intermediate cert — ensure `SSL_CA_BUNDLE=./certs/ca-bundle.pem` is set and the file exists (step 5) |
 | `404 ... model not found` / `model ... no longer available` | Providers rename models — update names in `app/llm.py` (currently `gemini-3.8-flash` and `openai/gpt-oss-120b`) |
 | Widget: "Could not reach WCE Bot" but `/health` is ok | `ALLOWED_ORIGINS` must include `null` for `file://` pages; restart the backend after editing `.env` |
+| Floating button doesn't appear on the host page | Backend must be running; check the browser console — an https page blocks an http `widget.js` (mixed content) |
+| `demo_proxy.py` returns "Upstream unavailable" | `BASE_URL` unreachable — check network / `.env` |
 | `WinError 10013` starting uvicorn | Port 8000 already in use — find and stop it: `Get-NetTCPConnection -LocalPort 8000` |
 | Scheduled task `Last Run Result: 0x1` | Refresh failed silently — run `python scripts/refresh_kb.py` manually to see the error |
 | `python -m venv` → "Unable to copy venvlauncher.exe" | A process is using `.venv` (e.g. a running uvicorn) — stop it first, then retry |
