@@ -505,6 +505,17 @@ class TestPersonDocTargeting:
             assert set(r) >= {"text", "source_url", "doc_type", "title", "score"}
             assert isinstance(r["score"], float)
 
+    def test_sense_rerank_never_demotes_the_targeted_person(self, person_retriever):
+        """The context-meaning re-rank runs *after* document targeting: a
+        fee-meaning chunk may be promoted just behind the profile (score 1.0)
+        but can never pass it, so the model still answers from — and cites —
+        the person's own document."""
+        results = person_retriever.search(
+            "which fee did siddharaj pujari pay", top_k=3
+        )
+        assert results, "expected results"
+        assert results[0]["source_url"].endswith("SDP1.pdf")
+
 
 # ── Syllabus-doc targeting (real search() path) ──────────────────────────────
 

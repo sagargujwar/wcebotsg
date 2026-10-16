@@ -8,6 +8,7 @@
 {"id": "adm-08", "type": "answer", "category": "admissions_fees", "query": "What is the last date for CAP reporting?", "sources": ["CAP-Reporting", "cap-reporting", "notice_board"]}
 {"id": "adm-09", "type": "answer", "category": "admissions_fees", "query": "How does the CAP round admission process work?", "sources": ["first-year-btech", "admissions"]}
 {"id": "adm-10", "type": "answer", "category": "admissions_fees", "query": "Is B.Des admission open now?", "sources": ["bachelor-of-design", "new-course"]}
+{"id": "adm-11", "type": "answer", "category": "admissions_fees", "query": "fee structure", "sources": ["Fee-Structure", "fee-structure", "fees-as-per-authorities"]}
 {"id": "acd-01", "type": "answer", "category": "academics", "query": "What is the syllabus of Computer Engineering?", "sources": ["department-of-computer", "Syllabus", "syllabus"]}
 {"id": "acd-02", "type": "answer", "category": "academics", "query": "List the subjects in second year mechanical engineering", "sources": ["department-of-mechanical", "Syllabus", "syllabus"]}
 {"id": "acd-03", "type": "answer", "category": "academics", "query": "What are the academic regulations?", "sources": ["academic-regulations"]}
@@ -20,6 +21,8 @@
 {"id": "acd-10", "type": "answer", "category": "academics", "query": "Tell me about multi-disciplinary minor programmes", "sources": ["multi-disciplinary-minors"]}
 {"id": "acd-11", "type": "answer", "category": "academics", "query": "What is the academic philosophy of the college?", "sources": ["academic-philosophy"]}
 {"id": "acd-12", "type": "answer", "category": "academics", "query": "How many seats are there in the AI and ML course?", "sources": ["overview-of-programmes", "artificial-intelligence", "intake"]}
+{"id": "acd-13", "type": "answer", "category": "academics", "query": "syllabus", "sources": ["syllabus", "Syllabus", "course-contents"]}
+{"id": "acd-14", "type": "answer", "category": "academics", "query": "exam timetable", "sources": ["examination-notices-and-schedule", "calendars-and-schedules"]}
 {"id": "plc-01", "type": "answer", "category": "placements_careers", "query": "What are the placement statistics?", "sources": ["placement-in-wce", "student-careers"]}
 {"id": "plc-02", "type": "answer", "category": "placements_careers", "query": "Which companies visit the campus for placement?", "sources": ["placement-in-wce", "student-careers"]}
 {"id": "plc-03", "type": "answer", "category": "placements_careers", "query": "Does the college provide internships?", "sources": ["internships", "student-careers"]}
@@ -29,6 +32,7 @@
 {"id": "plc-07", "type": "answer", "category": "placements_careers", "query": "Are there training programmes for placements?", "sources": ["trainings", "career-development-cell"]}
 {"id": "plc-08", "type": "answer", "category": "placements_careers", "query": "How does the college engage its alumni?", "sources": ["alumni-engagement", "distinguished-alumni"]}
 {"id": "plc-09", "type": "answer", "category": "placements_careers", "query": "Are there internships in industry collaboration?", "sources": ["industry-partnerships", "internships"]}
+{"id": "plc-10", "type": "answer", "category": "placements_careers", "query": "placement", "sources": ["placement-in-wce", "student-careers"]}
 {"id": "ppl-01", "type": "answer", "category": "people_admin", "query": "Who is the Director of the college?", "sources": ["/about/director", "director"]}
 {"id": "ppl-02", "type": "answer", "category": "people_admin", "query": "What is the contact number of the office?", "sources": ["communication", "contact"]}
 {"id": "ppl-03", "type": "answer", "category": "people_admin", "query": "List the heads of departments", "sources": ["heads-and-deans"]}
@@ -46,6 +50,7 @@
 {"id": "inf-06", "type": "answer", "category": "infra_campus", "query": "What are the reading room services?", "sources": ["reading-room"]}
 {"id": "inf-07", "type": "answer", "category": "infra_campus", "query": "Tell me about the academic buildings on campus", "sources": ["academic-buildings", "campus-life"]}
 {"id": "inf-08", "type": "answer", "category": "infra_campus", "query": "Is there a canteen in the college?", "sources": ["canteen"]}
+{"id": "inf-09", "type": "answer", "category": "infra_campus", "query": "hostel accommodation", "sources": ["hostel"]}
 {"id": "ntc-01", "type": "answer", "category": "notices_events", "query": "What are the latest notices?", "sources": ["notice_board", "/notices"]}
 {"id": "ntc-02", "type": "answer", "category": "notices_events", "query": "Any new announcements from the college?", "sources": ["notice_board", "/notices"]}
 {"id": "ntc-03", "type": "answer", "category": "notices_events", "query": "Show me the notice board updates", "sources": ["notice_board"]}
@@ -53,12 +58,14 @@
 {"id": "ntc-05", "type": "answer", "category": "notices_events", "query": "What is the latest news about the college?", "sources": ["news-archive", "blogs"]}
 {"id": "ntc-06", "type": "answer", "category": "notices_events", "query": "Is M.Tech admission 2026 open? Any notice?", "sources": ["m-tech-admission", "mtechadmissions", "notice_board"]}
 {"id": "ntc-07", "type": "answer", "category": "notices_events", "query": "Is there a new course announced this year?", "sources": ["new-course", "notice_board"]}
+{"id": "ntc-08", "type": "answer", "category": "notices_events", "query": "latest notice", "sources": ["notice_board", "/notices"]}
 {"id": "rch-01", "type": "answer", "category": "research", "query": "What research projects are funded by DST?", "sources": ["dst-funded", "research-consultancy"]}
 {"id": "rch-02", "type": "answer", "category": "research", "query": "How many patents has the college filed?", "sources": ["patents", "research-consultancy"]}
 {"id": "rch-03", "type": "answer", "category": "research", "query": "Is there a PhD programme at the college?", "sources": ["admissions/phd", "phd"]}
 {"id": "rch-04", "type": "answer", "category": "research", "query": "List the MoUs with industries", "sources": ["mous", "centre-of-excellences", "research-consultancy"]}
 {"id": "rch-05", "type": "answer", "category": "research", "query": "Tell me about the R&D cell", "sources": ["rd-cell", "research-consultancy"]}
 {"id": "rch-06", "type": "answer", "category": "research", "query": "Are student publications encouraged?", "sources": ["student-publications", "research-consultancy"]}
+{"id": "rch-07", "type": "answer", "category": "research", "query": "patents", "sources": ["patents", "research-consultancy"]}
 {"id": "gen-01", "type": "answer", "category": "general_info", "query": "What is the vision and mission of the college?", "sources": ["vision-mission"]}
 {"id": "gen-02", "type": "answer", "category": "general_info", "query": "When was the college established?", "sources": ["wce-at-glance", "vision-mission"]}
 {"id": "gen-03", "type": "answer", "category": "general_info", "query": "What is the NIRF ranking of the college?", "sources": ["nirf", "NIRF"]}

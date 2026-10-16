@@ -273,8 +273,10 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
 
     # Step 4 — Query rewriting + intent classification.
     # The *expanded* query feeds both the classifier and retrieval (full forms
-    # of abbreviations improve embedding matches); the LLM and the UI still
-    # see the student's original wording.
+    # of abbreviations sharpen both); what the ambiguous words *mean* in this
+    # domain is applied inside retrieval as a re-rank of the chunks found
+    # (app/retrieval.py: apply_sense_rerank), never as query text — so the
+    # LLM, the cache key and the UI keep the student's original wording.
     search_query = expand_query(query)
     if search_query != query:
         logger.debug("Query expanded: %.80s → %.80s", query, search_query)

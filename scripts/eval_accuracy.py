@@ -8,8 +8,12 @@ expected category, an acceptable source page, and answer/refuse intent):
   1. CLASSIFICATION — hybrid classifier accuracy (overall + per category,
      with the misclassified queries listed).
   2. RETRIEVAL — two modes over the same live Chroma knowledge base:
-       baseline : today's pipeline   (no category, global threshold 0.35)
-       aware    : category boost + per-category threshold + query expansion
+       baseline : no category prior, global threshold 0.35
+       aware    : category boost + per-category threshold
+     Both modes run production's query rewrite (abbreviation expansion) and
+     its context-meaning re-rank of the found chunks (inside search()), so the
+     two rows differ only in category-awareness; compare two runs to measure
+     a rewrite change.
      reporting coverage (passed the gate), hit@6 (an expected source page in
      the top-6), MRR, answered∧hit (the LLM would receive relevant context),
      and refusal correctness on out-of-scope queries.
@@ -89,6 +93,9 @@ def evaluate_retrieval(
     settings = get_settings()
     rows = []
     for item in items:
+        # Mirror app/main.py step 4: the classifier and retrieval both see the
+        # abbreviation-expanded query; the context-meaning re-rank happens
+        # inside retriever.search() itself, so nothing extra to pass here.
         query = expand_query(item["query"])
         category: Optional[str] = None
         if mode == "aware" and item["predicted"] != Category.GENERAL.value:

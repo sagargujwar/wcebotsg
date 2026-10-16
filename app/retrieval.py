@@ -17,7 +17,7 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 
-from app.categories import Category, boost_for
+from app.categories import Category, active_senses, boost_for, sense_matches
 from app.config import get_settings
 from app.people import find_person_chunks
 from app.syllabus import find_syllabus_chunks
@@ -144,6 +144,59 @@ def assemble_results(pool: List[dict], top_k: int, category: Optional[str] = Non
     return _rerank_chunks(pool, top_k)
 
 
+# ── Context-meaning re-rank (see apply_sense_rerank) ──────────────────────────
+# A chunk earns the sense bonus only when it is already within _BOOST_BAND of
+# the best result *and* carries at least _SENSE_MIN_HITS of the meaning's
+# defining phrases (app/categories.py: CONTEXT_SENSES).  0.03 inside a 0.15
+# band: the meaning decides the order of near-ties, never the membership of
+# the answer set.
+_SENSE_BOOST = 0.03
+_SENSE_MIN_HITS = 2
+
+
+def apply_sense_rerank(results: List[dict], query: str) -> List[dict]:
+    """
+    Re-order the finished top-k by what the query's ambiguous words *mean*.
+
+    ``CONTEXT_SENSES`` states, for each ambiguous word, the phrases carried by
+    the document that *is* the thing ("syllabus" → course contents, course
+    code, credits).  Of the chunks the embedding already retrieved, one that
+    sits within ``_BOOST_BAND`` of the best and carries at least
+    ``_SENSE_MIN_HITS`` of those phrases is promoted — so the LLM reads, and
+    cites from, the document that answers the question rather than the page
+    that merely repeats the word (annual/QA self-study reports do that most).
+
+    Only the order changes:
+      • scores are left exactly as they are, so the similarity gate (which
+        reads the best score, never the first chunk), the cache and the UI
+        keep seeing true cosine similarity, and out-of-scope refusals are
+        unaffected;
+      • no chunk enters or leaves the list, so answer coverage (hit@6) is
+        preserved by construction — only how high the right document sits
+        (MRR) can move.
+
+    A query naming no ambiguous word returns *results* untouched.
+    """
+    keys = active_senses(query)
+    if not keys or not results:
+        return results
+    best = max(c.get("score", 0.0) for c in results)
+
+    def sort_key(chunk: dict) -> float:
+        score = chunk.get("score", 0.0)
+        if best - score > _BOOST_BAND:
+            return score
+        if sense_matches(chunk.get("text", ""), keys) < _SENSE_MIN_HITS:
+            return score
+        # Clamped like the category boost: a promoted chunk can tie a
+        # score-1.0 targeted (person / syllabus) chunk but never pass it —
+        # stable sorting then keeps the targeted chunk first.
+        return min(1.0, score + _SENSE_BOOST)
+
+    # sorted() is stable, so chunks left on equal keys keep similarity order.
+    return sorted(results, key=sort_key, reverse=True)
+
+
 class ChromaRetriever:
     """Encapsulates embedding + Chroma similarity search."""
 
@@ -261,7 +314,18 @@ class ChromaRetriever:
                 targeted[0]["source_url"],
             )
 
-        return assemble_results(chunks, top_k, category)
+        # Finally the two priors, in order:
+        #   1. assemble_results — the *category* prior (a score boost inside a
+        #      relevance band, see there), and
+        #   2. apply_sense_rerank — the *context meaning* of the query's
+        #      ambiguous words, which re-orders this final list only (scores
+        #      and membership untouched), so the chunk the LLM reads first —
+        #      and the source it cites — is the document that *is* the thing
+        #      asked for.
+        return apply_sense_rerank(
+            assemble_results(chunks, top_k, category),
+            query,
+        )
 
     # ── Upsert (used by refresh_kb.py) ───────────────────────────────────────
 

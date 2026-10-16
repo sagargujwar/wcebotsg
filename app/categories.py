@@ -609,3 +609,108 @@ def expand_query(query: str, max_expansions: int = 3) -> str:
     if not expansions:
         return query
     return f"{query} ({'; '.join(expansions)})"
+
+
+# ── Contextual meaning of ambiguous words ─────────────────────────────────────
+# A dictionary word only becomes useful once we write down what it means
+# *here*: in this KB "syllabus" is the document built from course contents,
+# course codes and credits; a "notice" is a notice-board circular, not the
+# word's generic sense.  Each entry therefore lists the phrases that the
+# document which *is* the thing carries — the word's meaning, written down as
+# vocabulary.
+#
+# Retrieval applies it in `apply_sense_rerank` (app/retrieval.py): of the
+# chunks the embedding already found, the ones that actually look like the
+# thing move to the front, so the LLM answers — and cites — from the specific
+# document instead of from whichever page merely repeats the trigger word
+# (annual reports and NAAC/QA self-studies repeat those words most).
+#
+# Appending this meaning to the *query text* instead (so the embedding itself
+# sees it) was built, measured, and rejected: the extra generic vocabulary
+# pulls the embedding toward those big reports (hit@6 50→47–49, MRR
+# 0.536→0.492 on tests/eval/queries.jsonl).  Re-ranking the found chunks
+# cannot do that — no chunk enters or leaves the answer set.
+#
+# Constraints on every list (pinned by tests/test_senses.py):
+#   • branch-neutral — never names a department, so a branch-agnostic query
+#     ("syllabus") can never be steered at one department's document;
+#   • free of year markers and levels ("first", "final", "M.Tech", …) — never
+#     changes a parsed year of study or academic year;
+#   • common nouns only — never a person's name.
+CONTEXT_SENSES: Dict[str, List[str]] = {
+    # academics — the words syllabus/course-content PDFs are built from
+    "syllabus": ["course contents", "course name", "course code", "credits"],
+    "credit": ["credit structure", "credits", "curriculum structure"],
+    "timetable": ["time table", "timetable", "lecture", "class hours"],
+    "exam": ["hall ticket", "time table", "timetable", "examination schedule"],
+    "result": ["grade card", "result", "marks"],
+    # admissions & fees
+    "fee": ["fee structure", "tuition fee", "instalment", "fees as per"],
+    "admission": ["seat allotment", "cap round", "eligibility", "admission"],
+    "cutoff": ["cutoff", "cut off", "merit list"],
+    "cut off": ["cutoff", "cut off", "merit list"],
+    "scholarship": ["scholarship", "fee waiver", "stipend"],
+    # notices, careers, campus
+    "notice": ["notice board", "circular", "announcement", "notification"],
+    "placement": ["placement drive", "recruiters", "stipend", "package"],
+    "internship": ["internship", "stipend", "industrial training"],
+    "hostel": ["hostel", "mess", "accommodation"],
+}
+
+# Trigger match — word-boundary, case-insensitive, plural-tolerant: "fee" also
+# catches "fees" and "exam" also catches "exams".  Keys already ending in "s"
+# stay exact so "syllabus" never degenerates into "syllabuss".
+_SENSE_RES: Dict[str, "re.Pattern[str]"] = {
+    key: re.compile(
+        rf"(?<!\w){re.escape(key)}{'' if key.endswith('s') else 's?'}(?!\w)",
+        re.IGNORECASE,
+    )
+    for key in CONTEXT_SENSES
+}
+
+# Documents spell the phrases both ways round ("Credits", "Notices"), so the
+# phrases get the same plural-tolerant boundary treatment as the triggers.
+_SENSE_PHRASE_RES: Dict[str, List["re.Pattern[str]"]] = {
+    key: [
+        re.compile(
+            rf"(?<!\w){re.escape(phrase)}"
+            f"{'' if phrase.endswith('s') else 's?'}(?!\\w)",
+            re.IGNORECASE,
+        )
+        for phrase in phrases
+    ]
+    for key, phrases in CONTEXT_SENSES.items()
+}
+
+
+def active_senses(query: str) -> List[str]:
+    """
+    The CONTEXT_SENSES keys whose trigger word *query* actually contains.
+
+    Empty for a query naming none of them — the common case: this lexicon is
+    deliberately small, holding only the words whose college-domain meaning
+    differs enough from their dictionary one to be worth curating.
+    """
+    if not query:
+        return []
+    return [key for key, rx in _SENSE_RES.items() if rx.search(query)]
+
+
+def sense_matches(text: str, keys: List[str]) -> int:
+    """
+    How many *distinct* defining phrases of the senses in *keys* the document
+    *text* carries — a measure of what the document is, rather than how often
+    it repeats the trigger word itself.
+    """
+    if not text or not keys:
+        return 0
+    seen: set = set()
+    hits = 0
+    for key in keys:
+        for rx in _SENSE_PHRASE_RES.get(key, ()):
+            if rx.pattern in seen:
+                continue  # shared phrases (cutoff / cut off) count once
+            seen.add(rx.pattern)
+            if rx.search(text):
+                hits += 1
+    return hits

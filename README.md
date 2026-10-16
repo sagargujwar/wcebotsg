@@ -25,6 +25,10 @@ Browser Widget (frontend/index.html)
     ChromaDB search  (all-MiniLM-L6-v2, local, no API)
     Retrieve top-6 chunks — when a category is predicted, same-category
     chunks get a small relevance-banded boost (plain ranking otherwise)
+    Context-meaning re-rank — of the chunks found, the ones that carry what
+    the query's ambiguous word means *here* ("syllabus" → course contents,
+    course code, credits) move to the front; order only — scores, answer
+    coverage and refusals are untouched (app/retrieval.py)
            │
            ├─ + live YouTube feed context when the question is about videos
            │
@@ -55,9 +59,11 @@ college-rag-chatbot/
 │   ├── main.py          # FastAPI app, routes, rate limiting, widget endpoints
 │   ├── config.py        # pydantic-settings (reads .env)
 │   ├── constants.py     # the exact "I don't have information about this." reply
-│   ├── categories.py    # query taxonomy: 9 categories, lexicons, URL rules, rubrics
+│   ├── categories.py    # query taxonomy: 9 categories, lexicons, URL rules, rubrics,
+│   │                    #   + context meanings of ambiguous words (CONTEXT_SENSES)
 │   ├── intent.py        # hybrid query classifier (rules + seed prototypes)
 │   ├── retrieval.py     # ChromaDB search + SentenceTransformer + category boost
+│   │                    #   + context-meaning re-rank (apply_sense_rerank)
 │   ├── llm.py           # Gemini + Groq calls, fallback, system prompt + rubric
 │   ├── social.py        # live YouTube RSS context (keyless, cached)
 │   ├── cache.py         # Redis wrapper + rate-limit counters
@@ -359,7 +365,7 @@ out-of-scope queries declined (see §11).
 pytest tests/ -v
 ```
 
-177 tests — all passing, without any real API keys or a running Redis instance.
+360 tests — all passing, without any real API keys or a running Redis instance.
 The `test_pdf_text_extracted` and `test_missing_content_type_sniffs_pdf` tests are
 automatically skipped if the PDF fixture hasn't been generated.
 
@@ -376,7 +382,7 @@ pytest tests/test_cors.py -v
 ### Evaluate retrieval accuracy (query taxonomy)
 
 The bot classifies every query into a category (academics, admissions, notices, …)
-and uses it to steer retrieval. A labelled set of 79 queries
+and uses it to steer retrieval. A labelled set of 86 queries
 (`tests/eval/queries.jsonl`) measures both halves — no LLM calls, embedding +
 Chroma only:
 
@@ -388,12 +394,15 @@ Latest results (see `docs/eval-report.md`):
 
 | metric | baseline | category-aware |
 |---|---|---|
-| classification accuracy | — | **100% (79/79)** |
-| hit@6 (69 answerable queries) | 53.6% (37/69) | **62.3% (43/69)** |
-| MRR | 0.345 | **0.523** |
+| classification accuracy | — | **100% (86/86)** |
+| hit@6 (76 answerable queries) | 53.9% (41/76) | **65.8% (50/76)** |
+| MRR | 0.369 | **0.570** |
 | out-of-scope queries routed to a category | — | 0/10 (all correctly declined) |
 
-6 queries gained a relevant top-6 hit; **0 lost**.
+9 queries gained a relevant top-6 hit; **0 lost**. Both columns include the
+context-meaning re-rank: it re-orders the chunks already found (never the
+query), so it lifts MRR 0.536 → 0.570 on the category-aware path while hit@6,
+the similarity gate and out-of-scope refusals stay exactly where they were.
 
 After changing any URL→category rule, retag the existing KB (metadata only, no
 re-embedding):

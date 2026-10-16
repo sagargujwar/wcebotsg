@@ -5,7 +5,7 @@
 - **Backend:** FastAPI + ChromaDB + Redis + Gemini/Groq
 - **Frontend:** single-file vanilla HTML/CSS/JS (`frontend/index.html`) + floating widget loader (`frontend/widget.js`)
 - **Query taxonomy:** every query is classified (academics, admissions, notices, …) and the category steers retrieval, gating, and the LLM rubric — measured by `scripts/eval_accuracy.py`
-- **Tests:** 177 pytest tests, all mocked (no API keys / Redis / real site needed)
+- **Tests:** 360 pytest tests, all mocked (no API keys / Redis / real site needed)
 
 ---
 
@@ -132,6 +132,37 @@ Hybrid of two cheap signals, fused and gated:
 department`) for the **embedding/classification text only** — the LLM and the
 user still see the original wording.
 
+### Context meaning of ambiguous words — `CONTEXT_SENSES`
+
+A dictionary word is only useful once we write down what it means *here*.
+`CONTEXT_SENSES` (`app/categories.py`) curates the genuinely ambiguous
+college-domain words and, for each, the phrases the document that *is* the
+thing carries:
+
+```python
+"syllabus": ["course contents", "course name", "course code", "credits"],
+"notice":   ["notice board", "circular", "announcement", "notification"],
+```
+
+At the end of `search()`, `apply_sense_rerank()` (`app/retrieval.py`) uses
+those meanings on the **chunks already retrieved**: one inside the relevance
+band of the best result that carries ≥ 2 defining phrases moves up. So when a
+student asks for the *syllabus*, the document built from course contents and
+credits is what the LLM reads first and cites — not the annual report that
+merely repeats the word a dozen times.
+
+Two properties are deliberate, and both are pinned by tests:
+
+- **Order only.** Scores are untouched (the similarity gate reads the *best*
+  score, never the first chunk, so out-of-scope refusals cannot move) and no
+  chunk enters or leaves the list — answer coverage (hit@6) is preserved by
+  construction; only MRR can improve.
+- **The meaning never becomes query text.** Appending the gloss to the query
+  so the embedding sees it was implemented and measured first: the extra
+  generic vocabulary pulls the embedding toward the big reports
+  (hit@6 50 → 47–49, MRR 0.536 → 0.492), so it was rejected in favour of
+  re-ranking the found chunks.
+
 ### KB tagging
 
 Chunks are tagged at ingestion: `url_to_category(url, title)` picks the
@@ -155,6 +186,9 @@ filenames map via the title lexicon).
    `category` matches, relative to the pool's best score (so it re-orders
    near-tied candidates, never injects junk). If no matching chunk would
    survive the top-k, a corroboration fallback keeps the plain baseline rerank.
+   Then `apply_sense_rerank()` re-orders the finished list by what the query's
+   ambiguous words *mean* here (`CONTEXT_SENSES`) — again order only: scores
+   and membership are left as they are.
 2. **Gate** — `threshold_for()` (`app/categories.py:470`) may lower/raise the
    global 0.35 gate per category (e.g. `notices_events` = 0.30).
 3. **Prompt** — the spec's rubric is injected as a `{rubric}` block
@@ -167,18 +201,21 @@ filenames map via the title lexicon).
 
 ### Measured effect (`scripts/eval_accuracy.py`)
 
-79 labelled queries (`tests/eval/queries.jsonl`: 69 answerable across 8
+86 labelled queries (`tests/eval/queries.jsonl`: 76 answerable across 8
 categories ≥ 5 each, 10 out-of-scope). No LLM calls — embedding + Chroma only:
 
 | metric | baseline | category-aware |
 |---|---|---|
-| classification accuracy | — | **100 % (79/79)** |
-| hit@6 (69 answerable) | 53.6 % (37/69) | **62.3 % (43/69)** |
-| MRR | 0.345 | **0.523** |
+| classification accuracy | — | **100 % (86/86)** |
+| hit@6 (76 answerable) | 53.9 % (41/76) | **65.8 % (50/76)** |
+| MRR | 0.369 | **0.570** |
 | out-of-scope queries routed to a category | — | **0/10** (all declined → no prior applied) |
 
-6 queries gained a relevant top-6 hit, **0 lost**. Full breakdown per category
-and per query: `docs/eval-report.md` (regenerate with
+9 queries gained a relevant top-6 hit, **0 lost**. Removing the
+context-meaning re-rank drops MRR to 0.369 / 0.536 with hit@6 unchanged
+(41/76 and 50/76) — the meaning layer moves the right document *up*, it never
+adds or removes one. Full breakdown per category and per query:
+`docs/eval-report.md` (regenerate with
 `python scripts/eval_accuracy.py --out docs/eval-report.md`).
 
 ---
@@ -228,10 +265,12 @@ wcebot/
 │   ├── constants.py      # NO_INFO_MESSAGE — the single exact refusal reply
 │   ├── models.py         # ChatRequest / ChatResponse / Health / Error schemas
 │   ├── categories.py     # query taxonomy: specs, lexicons, URL rules, rubrics
+│   │                     #   + context meanings of ambiguous words (CONTEXT_SENSES)
 │   ├── intent.py         # QueryClassifier: rules + prototypes, confidence gates
 │   ├── llm.py            # LLMService: grounding prompt + rubric, Gemini → Groq fallback
 │   ├── social.py         # SocialService: live YouTube RSS context (keyless, cached)
 │   ├── retrieval.py      # ChromaRetriever: search / upsert / encoder + category boost
+│   │                     #   + context-meaning re-rank (apply_sense_rerank)
 │   └── cache.py          # RedisCache: answer cache + per-IP rate limiting
 ├── scraper/
 │   ├── scraper.py        # CollegeScraper: BFS crawl, HTML/PDF processing, robots, social links
@@ -246,9 +285,10 @@ wcebot/
 ├── frontend/
 │   ├── index.html        # the entire UI (standalone page + widget iframe panel)
 │   └── widget.js         # floating-button embed loader
-├── tests/                # 177 tests (chat API, taxonomy, eval set, CORS, retrieval,
+├── tests/                # 360 tests (chat API, taxonomy, sense layer, people,
+│   │                     #   syllabus targeting, eval set, CORS, retrieval,
 │   │                     #   scraper, social) + fixtures
-│   └── eval/queries.jsonl  # 79 labelled queries for scripts/eval_accuracy.py
+│   └── eval/queries.jsonl  # 86 labelled queries for scripts/eval_accuracy.py
 ├── docs/                 # eval-report.md (generated), project-explanation.md, gemini-prompts.md
 ├── certs/                # CA bundle for the target site's incomplete chain
 ├── data/                 # chroma_db/ and pdfs/ (git-ignored, runtime)
@@ -296,7 +336,7 @@ uvicorn app.main:app --reload     # backend on :8000
 # open frontend/index.html in a browser (file:// works — CORS allows Origin: null)
 # optional: python scripts/demo_proxy.py → http://localhost:9000 (college site + widget)
 
-pytest tests/ -v                                    # 177 tests
+pytest tests/ -v                                    # 360 tests
 python scripts/eval_accuracy.py --out docs/eval-report.md   # taxonomy evaluation
 ```
 
@@ -306,12 +346,15 @@ Schedule KB refreshes with cron (Linux/macOS) or Task Scheduler (Windows) — se
 
 ## 9. Testing strategy
 
-`pytest` runs **177 tests** with *everything external mocked* — no Redis, no Chroma, no LLM keys, no network:
+`pytest` runs **360 tests** with *everything external mocked* — no Redis, no Chroma, no LLM keys, no network:
 
-- `tests/test_chat_api.py` (38) — happy path, validation (422s), similarity-threshold fallback, cache hit/miss, rate limiting (429), source URL injection, **exact refusal + `source_url: null`**, refusals never cached, **category-aware behaviour** (response category, per-category gate, rubric passing, source preference, cached category)
+- `tests/test_chat_api.py` (42) — happy path, validation (422s), similarity-threshold fallback, cache hit/miss, rate limiting (429), source URL injection, **exact refusal + `source_url: null`**, refusals never cached, **category-aware behaviour** (response category, per-category gate, rubric passing, source preference, cached category)
 - `tests/test_intent.py` (35) — taxonomy specs, lexicon/URL rules, abbreviation expansion, prototype round-trips, confidence gates
+- `tests/test_senses.py` (79) — context-meaning layer: trigger detection, phrase matching, and `apply_sense_rerank` (promotes the document that *is* the thing; scores, membership and targeted chunks untouched)
 - `tests/test_eval_set.py` (6) — schema validation of `tests/eval/queries.jsonl` (size, categories, ids, sources)
-- `tests/test_retrieval.py` (22) — Chroma + encoder behavior, stub filtering / per-source reranking, `assemble_results` category boost
+- `tests/test_retrieval.py` (35) — Chroma + encoder behavior, stub filtering / per-source reranking, `assemble_results` category boost, person/syllabus document targeting
+- `tests/test_people.py` (47) — name extraction and person-document targeting
+- `tests/test_syllabus.py` (40) — branch/year/level parsing and syllabus-document targeting
 - `tests/test_cors.py` (6) — localhost any-port allowed, `null` (file://) allowed, foreign origins blocked, preflight
 - `tests/test_scraper.py` (40) — HTML/PDF processing, depth-0/1 crawling, redirects, robots handling, retries, link extraction
 - `tests/test_social.py` (30) — YouTube feed parsing, video-intent matching, social-link extraction, disabled-mode behavior (all offline)
@@ -344,9 +387,10 @@ Mock singletons are injected into `app.main`'s module globals (`_cache`, `_retri
 | Exact out-of-scope refusal | ✅ implemented — `NO_INFO_MESSAGE` + `source_url: null`, double-checked in the frontend |
 | Social media answers | ✅ implemented — static profile links in the KB + live YouTube RSS |
 | Floating widget on any site | ✅ implemented — `GET /widget.js` snippet, `GET /widget` iframe, `scripts/demo_proxy.py` demo |
-| Query taxonomy + category-aware retrieval | ✅ implemented — 9 categories, hybrid classifier (100 % on the eval set), relevance-banded boost, per-category gate, prompt rubric, 🏷 chip; hit@6 **53.6 % → 62.3 %**, MRR **0.345 → 0.523** (`docs/eval-report.md`) |
+| Query taxonomy + category-aware retrieval | ✅ implemented — 9 categories, hybrid classifier (100 % on the eval set), relevance-banded boost, per-category gate, prompt rubric, 🏷 chip; hit@6 **53.9 % → 65.8 %**, MRR **0.369 → 0.570** (`docs/eval-report.md`) |
+| Context meaning of ambiguous words | ✅ implemented — `CONTEXT_SENSES` meanings applied as a re-rank of the found chunks (`apply_sense_rerank`): MRR **0.536 → 0.570** on the category-aware path, hit@6 / gate / refusals unchanged. Query-text glossing was measured and rejected (it cost hits) |
 | `MAX_PAGES` cap | ✅ implemented — `MAX_PAGES` (`.env`, default 20000) stops the crawl with a warning; progress logged every 25 pages |
-| Eval set size | 79 hand-labelled queries — good enough to catch regressions, not a benchmark; extend `tests/eval/queries.jsonl` to grow it |
+| Eval set size | 86 hand-labelled queries — good enough to catch regressions, not a benchmark; extend `tests/eval/queries.jsonl` to grow it |
 | PDF filename collisions | Filenames use the URL basename only — two `syllabus.pdf` overwrite each other |
 | KB never pruned | Chunks from removed/depth-reduced pages stay in Chroma forever |
 | Stale answers up to 24 h | Refreshing the KB does not invalidate the Redis cache |

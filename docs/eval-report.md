@@ -1,20 +1,20 @@
 # Query-taxonomy evaluation report
 
-Eval set: `tests\eval\queries.jsonl` — 79 queries (69 answerable, 10 out-of-scope).
+Eval set: `tests\eval\queries.jsonl` — 86 queries (76 answerable, 10 out-of-scope).
 
 ## 1. Classification (hybrid rules + prototypes)
 
-**Accuracy: 100.0% (79/79)**
+**Accuracy: 100.0% (86/86)**
 
 | expected category | n | accuracy |
 |---|---|---|
-| admissions_fees | 10 | 100.0% |
-| academics | 12 | 100.0% |
-| placements_careers | 9 | 100.0% |
+| admissions_fees | 11 | 100.0% |
+| academics | 14 | 100.0% |
+| placements_careers | 10 | 100.0% |
 | people_admin | 10 | 100.0% |
-| infra_campus | 8 | 100.0% |
-| notices_events | 7 | 100.0% |
-| research | 6 | 100.0% |
+| infra_campus | 9 | 100.0% |
+| notices_events | 8 | 100.0% |
+| research | 7 | 100.0% |
 | general_info | 7 | 100.0% |
 | general | 10 | 100.0% |
 
@@ -24,8 +24,8 @@ No misclassifications.
 
 | mode | answered | hit@6 | MRR | answered ∧ hit |
 |---|---|---|---|---|
-| baseline | 100.0% (69/69) |  53.6% (37/69) | 0.345 |  53.6% (37/69) |
-| aware | 100.0% (69/69) |  62.3% (43/69) | 0.523 |  62.3% (43/69) |
+| baseline | 100.0% (76/76) |  53.9% (41/76) | 0.369 |  53.9% (41/76) |
+| aware | 100.0% (76/76) |  65.8% (50/76) | 0.570 |  65.8% (50/76) |
 
 ## 3. Out-of-scope queries (no category prior applied)
 
@@ -40,7 +40,7 @@ No misclassifications.
 
 ## 4. Per-query effect of the category-aware path
 
-- Queries that **gained** a relevant top-6 hit: 6 — adm-01, adm-10, acd-07, ppl-04, ntc-03, rch-04
+- Queries that **gained** a relevant top-6 hit: 9 — adm-01, adm-10, acd-07, acd-13, ppl-04, ntc-03, ntc-08, rch-04, rch-07
 - Queries that **lost** a relevant top-6 hit: 0
 
 ---
