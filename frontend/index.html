@@ -260,6 +260,37 @@
       border-bottom-left-radius: 4px;
     }
 
+    /* ── Answer formatting (markdown-lite) ─────────────────────────────── */
+    .bubble p {
+      margin: 0 0 6px;
+    }
+    .bubble p:last-of-type {
+      margin-bottom: 0;
+    }
+    .bubble ul {
+      margin: 4px 0 6px;
+      padding-left: 18px;
+    }
+    .bubble li {
+      margin: 2px 0;
+    }
+    .bubble li::marker {
+      color: var(--text-muted);
+    }
+    .bubble code {
+      background: var(--accent-dim);
+      border: 1px solid var(--bot-border);
+      border-radius: 4px;
+      padding: 0 4px;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 0.9em;
+    }
+    .bubble hr {
+      border: 0;
+      border-top: 1px solid var(--border);
+      margin: 8px 0;
+    }
+
     /* ── Timestamps ─────────────────────────────────────────────────────── */
     .msg-time {
       display: block;
@@ -880,6 +911,94 @@
     }
   }
 
+  // ── Markdown-lite answer renderer ─────────────────────────────────────────
+  // The LLM answers with light Markdown (**bold**, *italic*, `-` bullets,
+  // 1. numbered lists, ### headings), but bubbles are plain HTML — without
+  // this the raw asterisks reach the screen.  The answer is HTML-escaped
+  // FIRST; this function then only ever adds tags of its own (XSS-safe).
+  function renderAnswerHtml(answer) {
+    // Inline markdown on already-escaped text.  Code spans are parked in
+    // placeholders first so their contents survive asterisk handling.
+    const inline = (text) => {
+      const codes = [];
+      let s = String(text).replace(/`([^`]+)`/g, (_, code) => {
+        codes.push(code);
+        return "\u0000" + (codes.length - 1) + "\u0000";
+      });
+      s = s
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+        .replace(/\*/g, ""); // stray unmatched asterisks (unclosed emphasis)
+      return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
+    };
+
+    const blocks = [];
+    let para = [];
+    let listTag = null;
+    let items = [];
+
+    const flushPara = () => {
+      if (para.length) blocks.push(`<p>${para.join("<br>")}</p>`);
+      para = [];
+    };
+    const flushList = () => {
+      if (listTag) {
+        blocks.push(
+          `<${listTag}>${items.map((h) => `<li>${h}</li>`).join("")}</${listTag}>`
+        );
+      }
+      listTag = null;
+      items = [];
+    };
+    const openList = (tag) => {
+      if (listTag !== tag) {
+        flushList();
+        listTag = tag;
+      }
+    };
+
+    for (const line of escapeHtml(String(answer)).split(/\r?\n/)) {
+      if (!line.trim()) {
+        flushPara();
+        flushList();
+        continue;
+      }
+      if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+        flushPara();
+        flushList();
+        blocks.push("<hr>");
+        continue;
+      }
+      const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
+      if (bullet) {
+        flushPara();
+        openList("ul");
+        items.push(inline(bullet[1]));
+        continue;
+      }
+      // 1–2 digits only: "2024. The fee…" is prose, not a list item.
+      const numbered = line.match(/^\s*(\d{1,2})[.)]\s+(.*)$/);
+      if (numbered) {
+        flushPara();
+        openList("ol");
+        items.push(inline(numbered[2]));
+        continue;
+      }
+      const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
+      if (heading) {
+        flushList();
+        flushPara();
+        blocks.push(`<p><strong>${inline(heading[1])}</strong></p>`);
+        continue;
+      }
+      flushList();
+      para.push(inline(line));
+    }
+    flushPara();
+    flushList();
+    return blocks.join("");
+  }
+
   // ── Render bot answer ──────────────────────────────────────────────────────
   const NO_INFO_PREFIX = "I don't have information about this.";
 
@@ -897,7 +1016,7 @@
   function renderBotAnswer(data, elapsedMs) {
     const { answer, source_url, cached, category } = data;
 
-    let html = `<p>${escapeHtml(answer).replace(/\n/g, "<br>")}</p>`;
+    let html = renderAnswerHtml(answer);
 
     // "View Document" only for real answers — never for the no-info refusal
     if (source_url && !isNoInfoAnswer(answer)) {

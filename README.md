@@ -20,24 +20,29 @@ Browser Widget (frontend/index.html)
          │       └─ HIT  → return {answer, source_url, cached: true}
          │
     ▼  MISS
+    Query rewrite (abbreviation expansion) + category classification
+    (app/intent.py — hybrid keyword rules + seed-query prototypes)
     ChromaDB search  (all-MiniLM-L6-v2, local, no API)
-    Retrieve top-6 most similar chunks
+    Retrieve top-6 chunks — when a category is predicted, same-category
+    chunks get a small relevance-banded boost (plain ranking otherwise)
            │
            ├─ + live YouTube feed context when the question is about videos
            │
-           ├─ Similarity < 0.35 → "I don't have information about this." (no LLM call)
+           ├─ Similarity < per-category threshold (default 0.35)
+           │   → "I don't have information about this." (no LLM call)
            │
            ▼  Above threshold
     LLM  (Gemini gemini-3.8-flash 25s → Groq openai/gpt-oss-120b → graceful fail)
     Grounded system prompt: answer ONLY from context, cite sources;
+    + category rubric (guardrails for that category);
     out-of-scope / missing info → "I don't have information about this."
            │
            ▼
      Source URL injected — suppressed when the answer is the no-info refusal
      Write to Redis cache (TTL 24 h; refusals are never cached)
-         │
-         ▼
-   Return {answer, source_url, cached: false}
+          │
+          ▼
+   Return {answer, source_url, category, cached: false}
 ```
 
 ---
@@ -50,8 +55,10 @@ college-rag-chatbot/
 │   ├── main.py          # FastAPI app, routes, rate limiting, widget endpoints
 │   ├── config.py        # pydantic-settings (reads .env)
 │   ├── constants.py     # the exact "I don't have information about this." reply
-│   ├── retrieval.py     # ChromaDB search + SentenceTransformer
-│   ├── llm.py           # Gemini + Groq calls, fallback, system prompt
+│   ├── categories.py    # query taxonomy: 9 categories, lexicons, URL rules, rubrics
+│   ├── intent.py        # hybrid query classifier (rules + seed prototypes)
+│   ├── retrieval.py     # ChromaDB search + SentenceTransformer + category boost
+│   ├── llm.py           # Gemini + Groq calls, fallback, system prompt + rubric
 │   ├── social.py        # live YouTube RSS context (keyless, cached)
 │   ├── cache.py         # Redis wrapper + rate-limit counters
 │   └── models.py        # Pydantic request/response schemas
@@ -60,6 +67,8 @@ college-rag-chatbot/
 │   └── chunker.py       # Paragraph-boundary chunker with overlap
 ├── scripts/
 │   ├── refresh_kb.py    # End-to-end pipeline (crawl → chunk → embed → upsert)
+│   ├── tag_categories.py  # Backfill chunk categories in Chroma (metadata-only)
+│   ├── eval_accuracy.py # Baseline vs category-aware retrieval evaluation
 │   └── demo_proxy.py    # Local college-site mirror with the widget injected
 ├── static_docs/
 │   └── social_media.json  # Official social profiles → ingested into the KB
@@ -68,6 +77,7 @@ college-rag-chatbot/
 │   └── widget.js        # Floating-button embed loader for host pages
 ├── docs/
 │   ├── project-explanation.md  # Architecture & design deep-dive
+│   ├── eval-report.md          # Generated evaluation results (see §11)
 │   └── gemini-prompts.md       # Prompts used for the UI redesign
 ├── tests/
 │   ├── fixtures/
@@ -75,9 +85,12 @@ college-rag-chatbot/
 │   │   ├── syllabus.html      # Mock syllabus page
 │   │   ├── fee_structure.pdf  # Generated test PDF (run generate_fixtures.py)
 │   │   └── generate_fixtures.py
+│   ├── eval/queries.jsonl     # 79 labelled queries for the eval harness
 │   ├── conftest.py
 │   ├── test_scraper.py
 │   ├── test_retrieval.py
+│   ├── test_intent.py
+│   ├── test_eval_set.py
 │   ├── test_social.py
 │   ├── test_cors.py
 │   └── test_chat_api.py
@@ -332,6 +345,12 @@ frontend double-checks before rendering the link. Refusals are also **never
 written to the Redis cache**, so a later KB refresh is never masked by a
 stale "no info" answer.
 
+The query classifier deliberately **never predicts an out-of-scope category**
+(it declines the route and falls back to `general`, no category prior is
+applied) — producing the refusal stays with the similarity gate and the
+grounded LLM prompt, exactly as above. Verified on the eval set: 10/10
+out-of-scope queries declined (see §11).
+
 ---
 
 ## 11 · Run Tests
@@ -340,17 +359,47 @@ stale "no info" answer.
 pytest tests/ -v
 ```
 
-117 tests — all passing, without any real API keys or a running Redis instance.
+177 tests — all passing, without any real API keys or a running Redis instance.
 The `test_pdf_text_extracted` and `test_missing_content_type_sniffs_pdf` tests are
 automatically skipped if the PDF fixture hasn't been generated.
 
 To run a specific test file:
 ```bash
 pytest tests/test_chat_api.py -v
-pytest tests/test_scraper.py -v
+pytest tests/test_intent.py -v      # query-taxonomy classifier
 pytest tests/test_retrieval.py -v
+pytest tests/test_scraper.py -v
 pytest tests/test_social.py -v
 pytest tests/test_cors.py -v
+```
+
+### Evaluate retrieval accuracy (query taxonomy)
+
+The bot classifies every query into a category (academics, admissions, notices, …)
+and uses it to steer retrieval. A labelled set of 79 queries
+(`tests/eval/queries.jsonl`) measures both halves — no LLM calls, embedding +
+Chroma only:
+
+```bash
+python scripts/eval_accuracy.py --out docs/eval-report.md
+```
+
+Latest results (see `docs/eval-report.md`):
+
+| metric | baseline | category-aware |
+|---|---|---|
+| classification accuracy | — | **100% (79/79)** |
+| hit@6 (69 answerable queries) | 53.6% (37/69) | **62.3% (43/69)** |
+| MRR | 0.345 | **0.523** |
+| out-of-scope queries routed to a category | — | 0/10 (all correctly declined) |
+
+6 queries gained a relevant top-6 hit; **0 lost**.
+
+After changing any URL→category rule, retag the existing KB (metadata only, no
+re-embedding):
+
+```bash
+python scripts/tag_categories.py --force
 ```
 
 ---

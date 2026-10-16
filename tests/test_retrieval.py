@@ -378,3 +378,280 @@ class TestAssembleResults:
         ]
         out = assemble_results(pool, top_k=2, category="admissions_fees")
         assert all(c["score"] <= 1.0 for c in out)
+
+
+# ── Person-doc targeting (real search() path) ────────────────────────────────
+
+PERSON_CHUNKS = [
+    {
+        "id": "sdp-0",
+        "text": (
+            "Faculty_Profile\nProfile of Mr. Pujari Siddharaj Dattatray\n"
+            "Name : Mr. Pujari Siddharaj Dattatray\nDepartment : Computer "
+            "Engineering\nDate of Birth : 12-05-1988\nDesignation : Assistant "
+            "Professor\nOfficial E-mail : sdp@walchandsangli.ac.in"
+        ),
+        "source_url": "http://test.edu/uploads/SDP1.pdf",
+        "title": "Sdp1",
+    },
+    {
+        "id": "sdp-1",
+        "text": (
+            "Publications\n1. Pujari S. D., \"Detection of Autism Spectrum "
+            "Disorder Using Machine Learning\", International Journal, 2024. "
+            "The method achieves state-of-the-art accuracy on the benchmark."
+        ),
+        "source_url": "http://test.edu/uploads/SDP1.pdf",
+        "title": "Sdp1",
+    },
+    {
+        "id": "aishe-0",
+        "text": (
+            "AISHE-2024-25 Report\nFaculty counts by department\nComputer "
+            "Engineering : 42 teachers sanctioned, 38 in position. Total "
+            "students enrolled across all programmes : 3100."
+        ),
+        "source_url": "http://test.edu/uploads/AISHE-2024-25-Report.pdf",
+        "title": "AISHE",
+    },
+    {
+        "id": "fees-0",
+        "text": (
+            "The annual tuition fee for General category B.E. students at WCE "
+            "is ₹1,09,500. Tuition fee is payable in two instalments per year."
+        ),
+        "source_url": "http://test.edu/fees",
+        "title": "Fee Structure",
+    },
+]
+
+
+@pytest.fixture(scope="module")
+def person_retriever():
+    """A real ChromaRetriever.search backed by an in-memory collection that
+    contains a person's profile plus an aggregate report outranking it."""
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+    from sentence_transformers import SentenceTransformer
+
+    from app import people as people_module
+    from app.retrieval import ChromaRetriever
+
+    client = chromadb.EphemeralClient(
+        settings=ChromaSettings(anonymized_telemetry=False)
+    )
+    collection = client.get_or_create_collection(
+        name="test_person_kb", metadata={"hnsw:space": "cosine"}
+    )
+    encoder = SentenceTransformer("all-MiniLM-L6-v2")
+    texts = [c["text"] for c in PERSON_CHUNKS]
+    embeddings = encoder.encode(texts, normalize_embeddings=True).tolist()
+    collection.upsert(
+        ids=[c["id"] for c in PERSON_CHUNKS],
+        documents=texts,
+        embeddings=embeddings,
+        metadatas=[
+            {
+                "source_url": c["source_url"],
+                "doc_type": "pdf" if c["source_url"].endswith(".pdf") else "html",
+                "title": c["title"],
+                "category": "",
+                "chunk_index": i,
+            }
+            for i, c in enumerate(PERSON_CHUNKS)
+        ],
+    )
+
+    # Bypass __init__ (which opens the on-disk KB) and wire the test store.
+    retriever = ChromaRetriever.__new__(ChromaRetriever)
+    retriever._encoder = encoder
+    retriever._collection = collection
+
+    people_module.reset_person_doc_cache()
+    yield retriever
+    people_module.reset_person_doc_cache()
+
+
+class TestPersonDocTargeting:
+    def test_name_query_surfaces_own_profile_first(self, person_retriever):
+        results = person_retriever.search("who is siddharaj pujari", top_k=3)
+        assert results, "expected results"
+        assert results[0]["source_url"].endswith("SDP1.pdf")
+
+    def test_profile_beats_aggregate_report(self, person_retriever):
+        # The AISHE report outranks the profile on raw embedding similarity;
+        # person targeting must still put the profile in front.
+        results = person_retriever.search("tell me about siddharaj d pujari", top_k=4)
+        urls = [c["source_url"] for c in results]
+        assert any(u.endswith("SDP1.pdf") for u in urls)
+        assert urls.index(next(u for u in urls if u.endswith("SDP1.pdf"))) == 0
+
+    def test_role_query_untargeted(self, person_retriever):
+        # No name → person path must stay silent (baseline owns the ranking).
+        from app.people import find_person_chunks
+
+        assert find_person_chunks(person_retriever._collection, "what is the tuition fee") == []
+        results = person_retriever.search("what is the tuition fee", top_k=3)
+        assert results
+
+    def test_person_chunks_lead_even_at_top_k_one(self, person_retriever):
+        results = person_retriever.search("who is siddharaj pujari", top_k=1)
+        assert len(results) == 1
+        assert results[0]["source_url"].endswith("SDP1.pdf")
+
+    def test_result_shape_intact(self, person_retriever):
+        results = person_retriever.search("who is siddharaj pujari", top_k=3)
+        for r in results:
+            assert set(r) >= {"text", "source_url", "doc_type", "title", "score"}
+            assert isinstance(r["score"], float)
+
+
+# ── Syllabus-doc targeting (real search() path) ──────────────────────────────
+
+SYLLABUS_CHUNKS = [
+    {
+        "id": "ty-cse-0",
+        "text": (
+            "3/2/26, 3:15 PM Course Information\nProgramme B.Tech. (Computer "
+            "Science and Engineering)\nClass, Semester Third Year B. Tech., "
+            "Sem V\nCourse Code 7CS301\nCourse Name Compiler Design\n"
+            "Credits 4\nCourse Outcomes: describe phases of compilation, "
+            "design lexer and parser algorithms for a compiler."
+        ),
+        "source_url": "http://test.edu/uploads/5.-TY-CSE-Syllabus-25-26-CC.pdf",
+        "title": "5. Ty Cse Syllabus 25 26 Cc",
+    },
+    {
+        "id": "ty-cse-1",
+        "text": (
+            "Course Code 7CS302 Course Name Operating Systems Credits 4. "
+            "Scheduling algorithms, deadlock handling, memory management and "
+            "file systems covered over the semester."
+        ),
+        "source_url": "http://test.edu/uploads/5.-TY-CSE-Syllabus-25-26-CC.pdf",
+        "title": "5. Ty Cse Syllabus 25 26 Cc",
+    },
+    {
+        # Shared assessment boilerplate: near-identical text lives in every
+        # syllabus PDF, so raw similarity floods with it — exactly the failure
+        # mode this targeting exists to beat.
+        "id": "boilerplate-0",
+        "text": (
+            "Assessment The assessment of every course is based on MSE, ISE "
+            "and ESE. Minimum passing marks in each head of examination as "
+            "per university norms. Attendance requirement is 75 percent."
+        ),
+        "source_url": "http://test.edu/uploads/Course_Contents-19-to-23.pdf",
+        "title": "Course Contents 19 To 23",
+    },
+    {
+        "id": "fees-0",
+        "text": (
+            "The annual tuition fee for General category B.E. students at WCE "
+            "is ₹1,09,500. Tuition fee is payable in two instalments per year."
+        ),
+        "source_url": "http://test.edu/fees",
+        "title": "Fee Structure",
+    },
+]
+
+
+@pytest.fixture(scope="module")
+def syllabus_retriever():
+    """A real ChromaRetriever.search backed by an in-memory collection whose
+    boilerplate doc outranks the named syllabus doc on raw similarity."""
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+    from sentence_transformers import SentenceTransformer
+
+    from app import syllabus as syllabus_module
+    from app.retrieval import ChromaRetriever
+
+    client = chromadb.EphemeralClient(
+        settings=ChromaSettings(anonymized_telemetry=False)
+    )
+    collection = client.get_or_create_collection(
+        name="test_syllabus_kb", metadata={"hnsw:space": "cosine"}
+    )
+    encoder = SentenceTransformer("all-MiniLM-L6-v2")
+    texts = [c["text"] for c in SYLLABUS_CHUNKS]
+    embeddings = encoder.encode(texts, normalize_embeddings=True).tolist()
+    collection.upsert(
+        ids=[c["id"] for c in SYLLABUS_CHUNKS],
+        documents=texts,
+        embeddings=embeddings,
+        metadatas=[
+            {
+                "source_url": c["source_url"],
+                "doc_type": "pdf" if c["source_url"].endswith(".pdf") else "html",
+                "title": c["title"],
+                "category": "",
+                "chunk_index": i,
+            }
+            for i, c in enumerate(SYLLABUS_CHUNKS)
+        ],
+    )
+
+    retriever = ChromaRetriever.__new__(ChromaRetriever)
+    retriever._encoder = encoder
+    retriever._collection = collection
+
+    syllabus_module.reset_syllabus_index_cache()
+    yield retriever
+    syllabus_module.reset_syllabus_index_cache()
+
+
+class TestSyllabusDocTargeting:
+    def test_branch_year_query_surfaces_syllabus_first(self, syllabus_retriever):
+        results = syllabus_retriever.search(
+            "current third year syllabus for cse", top_k=3
+        )
+        assert results, "expected results"
+        assert results[0]["source_url"].endswith("5.-TY-CSE-Syllabus-25-26-CC.pdf")
+
+    def test_course_content_beats_boilerplate(self, syllabus_retriever):
+        # The boilerplate doc is the only CSE-ish context the pool would have
+        # ranked highly; targeting must put the real course content in front.
+        results = syllabus_retriever.search(
+            "cse syllabus for 25-26 third year", top_k=4
+        )
+        urls = [c["source_url"] for c in results]
+        assert any(u.endswith("5.-TY-CSE-Syllabus-25-26-CC.pdf") for u in urls)
+        assert urls[0].endswith("5.-TY-CSE-Syllabus-25-26-CC.pdf")
+        assert "Course Name Compiler Design" in results[0]["text"]
+
+    def test_named_subject_actually_present(self, syllabus_retriever):
+        results = syllabus_retriever.search(
+            "what subjects are in the third year cse syllabus", top_k=3
+        )
+        joined = " ".join(r["text"] for r in results)
+        assert "Compiler Design" in joined
+
+    def test_non_syllabus_query_untargeted(self, syllabus_retriever):
+        from app.syllabus import find_syllabus_chunks
+
+        assert find_syllabus_chunks(
+            syllabus_retriever._collection, "what is the tuition fee"
+        ) == []
+        results = syllabus_retriever.search("what is the tuition fee", top_k=3)
+        assert results
+
+    def test_pronoun_it_untargeted(self, syllabus_retriever):
+        from app.syllabus import find_syllabus_chunks
+
+        assert find_syllabus_chunks(
+            syllabus_retriever._collection, "is it possible to get the syllabus"
+        ) == []
+
+    def test_syllabus_chunks_lead_even_at_top_k_one(self, syllabus_retriever):
+        results = syllabus_retriever.search(
+            "third year cse syllabus", top_k=1
+        )
+        assert len(results) == 1
+        assert results[0]["source_url"].endswith("5.-TY-CSE-Syllabus-25-26-CC.pdf")
+
+    def test_result_shape_intact(self, syllabus_retriever):
+        results = syllabus_retriever.search("third year cse syllabus", top_k=3)
+        for r in results:
+            assert set(r) >= {"text", "source_url", "doc_type", "title", "score"}
+            assert isinstance(r["score"], float)

@@ -573,6 +573,13 @@ ABBREVIATIONS: Dict[str, str] = {
     "ug": "under graduate",
     "pg": "post graduate",
     "rd": "research and development",
+    "cse": "computer science and engineering",
+    "aiml": "artificial intelligence and machine learning",
+    "mech": "mechanical engineering",
+    "entc": "electronics and telecommunication",
+    "ty": "third year",
+    "sy": "second year",
+    "fy": "first year",
 }
 _ABBREV_RES: Dict[str, "re.Pattern[str]"] = {
     abbr: re.compile(rf"(?<!\w){re.escape(abbr)}(?!\w)", re.IGNORECASE)

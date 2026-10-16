@@ -10,6 +10,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -138,6 +139,101 @@ def _is_no_info(answer: str) -> bool:
     return normalised.startswith(NO_INFO_MESSAGE)
 
 
+# ── Source attribution ───────────────────────────────────────────────────────
+# "View Document" must open the document the answer was *grounded in*, not
+# merely the highest-scoring chunk.  For person queries a different faculty
+# member's resume routinely outranks the record the facts came from (same
+# layout, shared co-authorship lines), which sent students to someone else's
+# profile.  Preference order: LLM-cited URL → lexical grounding of the answer
+# in each chunk → retrieval score / category (the original behaviour).
+_CONTENT_TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+_URL_RE = re.compile(r"https?://[^\s)\]>\"']+")
+
+# Generic words that appear in most answers and most chunks — useless for
+# telling documents apart.
+_STOPWORDS = frozenset(
+    """
+    the and for are was were with from this that have has had you your not
+    but all any can who what when where how why about into over than then
+    them they their there these those its his her our out one two per also
+    please tell does done please information details please answer question
+    walchand college engineering wce student students
+    """.split()
+)
+
+# Below this many shared content tokens the grounding signal is noise.
+_MIN_GROUNDING_SUPPORT = 3
+
+
+def _strip_source_line(answer: str) -> str:
+    """Drop the trailing "Source: …" citation the LLM is instructed to append."""
+    return re.sub(r"\n\s*Source\s*:.*$", "", answer.strip(), flags=re.IGNORECASE)
+
+
+def _content_tokens(text: str) -> set:
+    """Lowercased word/number tokens (≥3 chars) minus generic stopwords."""
+    return {
+        t for t in _CONTENT_TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS
+    }
+
+
+def _cited_source_url(answer: str, chunks: list) -> Optional[str]:
+    """Return the chunk URL the LLM explicitly cited, if it is a known chunk."""
+    cited = {u.rstrip(".,;)") for u in _URL_RE.findall(answer)}
+    for chunk in chunks:
+        url = chunk.get("source_url") or ""
+        if url and url in cited:
+            return url
+    return None
+
+
+def _pick_source_url(answer: str, chunks: list, intent: IntentResult) -> Optional[str]:
+    """
+    Choose the document link for *answer* from the retrieved *chunks*.
+
+    1. If the answer cites a URL that matches one of the chunks, trust it —
+       the system prompt requires the LLM to name the document it used.
+    2. Otherwise count how many of the answer's content tokens each chunk
+       actually contains; the best-supported chunk is the one the facts came
+       from (category and retrieval score break ties).
+    3. When nothing is well supported (heavy paraphrase, no overlap), fall
+       back to the original category-then-score ranking.
+    """
+    with_url = [c for c in chunks if c.get("source_url")]
+    if not with_url:
+        return None
+
+    cited = _cited_source_url(answer, with_url)
+    if cited:
+        return cited
+
+    body_tokens = _content_tokens(_strip_source_line(answer))
+    if body_tokens:
+        support = {
+            id(c): len(body_tokens & _content_tokens(c.get("text", "")))
+            for c in with_url
+        }
+        if max(support.values()) >= _MIN_GROUNDING_SUPPORT:
+            def rank(chunk: dict):
+                same_category = (
+                    intent.is_specific
+                    and chunk.get("category") == intent.category.value
+                )
+                return (support[id(chunk)], same_category, chunk.get("score", 0.0))
+
+            return max(with_url, key=rank).get("source_url") or None
+
+    same_category = (
+        [c for c in with_url if c.get("category") == intent.category.value]
+        if intent.is_specific
+        else []
+    )
+    top_chunk = max(
+        same_category or with_url, key=lambda c: c.get("score", 0.0)
+    )
+    return top_chunk.get("source_url") or None
+
+
 @app.post(
     "/chat",
     response_model=ChatResponse,
@@ -226,22 +322,12 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     if _llm:
         answer = _llm.generate(query, chunks, rubric=get_spec(intent.category).rubric or None)
 
-    # Step 7 — Source URL; suppressed for refusals.  Chunks of the predicted
-    # category win ties because their scores were already boosted at retrieval
-    # time; this explicit preference covers unboosted edge cases too.
+    # Step 7 — Source URL; suppressed for refusals.  The link must open the
+    # document the answer is grounded in (see _pick_source_url) — the highest
+    # scored chunk is often a different document with a similar layout.
     source_url: Optional[str] = None
-    if not _is_no_info(answer):
-        with_url = [c for c in chunks if c.get("source_url")]
-        if with_url:
-            same_category = (
-                [c for c in with_url if c.get("category") == intent.category.value]
-                if intent.is_specific
-                else []
-            )
-            top_chunk = max(
-                same_category or with_url, key=lambda c: c.get("score", 0.0)
-            )
-            source_url = top_chunk.get("source_url") or None
+    if not _is_no_info(answer) and answer != UNAVAILABLE_MESSAGE:
+        source_url = _pick_source_url(answer, chunks, intent)
 
     # Step 8 — Cache response (only real answers — never errors or refusals,
     # so an improved KB/LLM is not masked by a stale "no info" for 24 h)

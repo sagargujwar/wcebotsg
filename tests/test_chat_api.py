@@ -381,6 +381,92 @@ class TestChatEndpoint:
         assert resp.status_code == 200
         assert resp.json()["source_url"] == "http://test.edu/fee_structure.pdf"
 
+    def test_source_url_follows_answer_grounding_not_top_score(self):
+        """
+        Regression: a higher-scored chunk of a *different* document (another
+        faculty member's resume) must not win the link when the answer's facts
+        came from a lower-scored chunk.
+        """
+        other_resume = {
+            "text": (
+                ":: Personal Details: Name Atul Siddheshwar Patane "
+                "Postal Address A/P-Kavathe-Ekand Tal-Tasgaon Dist-Sangli. "
+                "Date of Birth 15th October 1990 Languages Known English Hindi Marathi. "
+                "Objective: To work with a reputed institution as an Assistant Professor."
+            ),
+            "source_url": "http://test.edu/atul-patane-resume.pdf",
+            "doc_type": "pdf",
+            "title": "Mr. Atul Patane Resume",
+            "score": 0.711,
+        }
+        aishe_record = {
+            "text": (
+                "Name of the Employee Pujari Siddharaj Dattatray "
+                "Gender Male Date of Birth 1991-07-16 "
+                "Email sidpujari1991@gmail.com Mobile No 8421471098 "
+                "Designation Assistant Professor Contractual "
+                "Department/Centre Computer Science and Engineering "
+                "Date of Joining 16 August 2019"
+            ),
+            "source_url": "http://test.edu/aishe-2024-25-report.pdf",
+            "doc_type": "pdf",
+            "title": "Aishe 2024 25 Report",
+            "score": 0.707,
+        }
+        answer = (
+            "**Siddharaj Dattatray Pujari**\n\n"
+            "- **Position:** Assistant Professor (Contractual)\n"
+            "- **Department:** Computer Science and Engineering\n"
+            "- **Date of Joining:** 16 August 2019\n"
+            "- **Email:** sidpujari1991@gmail.com\n"
+            "- **Mobile:** 8421471098\n"
+            "- **Date of birth:** 16 July 1991\n\n"
+            "Source: Aishe 2024 25 Report"
+        )
+        client = _make_client(
+            retriever=_make_mock_retriever(chunks=[other_resume, aishe_record]),
+            llm=_make_mock_llm(answer=answer),
+        )
+        resp = client.post("/chat", json={"query": "who is siddharaj pujari"})
+        assert resp.status_code == 200
+        assert resp.json()["source_url"] == "http://test.edu/aishe-2024-25-report.pdf"
+
+    def test_source_url_uses_llm_citation_when_present(self):
+        """A URL the LLM cites (matching a chunk) beats score ordering."""
+        client = _make_client(
+            retriever=_make_mock_retriever(chunks=GOOD_CHUNKS),
+            llm=_make_mock_llm(
+                answer=(
+                    "The fee is ₹1,09,500 for General category. "
+                    "Source: http://test.edu/fees"
+                )
+            ),
+        )
+        resp = client.post("/chat", json={"query": "tuition fee?"})
+        assert resp.json()["source_url"] == "http://test.edu/fees"
+
+    def test_source_url_falls_back_to_score_when_no_grounding(self):
+        """Heavy paraphrase with no shared tokens keeps the old ranking."""
+        paraphrase = (
+            "General category students pay one lakh nine thousand five hundred "
+            "rupees each year. Source: Fee Structure"
+        )
+        client = _make_client(
+            retriever=_make_mock_retriever(chunks=GOOD_CHUNKS),
+            llm=_make_mock_llm(answer=paraphrase),
+        )
+        resp = client.post("/chat", json={"query": "how much is tuition?"})
+        assert resp.json()["source_url"] == "http://test.edu/fees"
+
+    def test_unavailable_message_has_no_source_url(self):
+        """An LLM outage message must not carry a document link."""
+        from app.constants import UNAVAILABLE_MESSAGE
+
+        client = _make_client(llm=_make_mock_llm(answer=UNAVAILABLE_MESSAGE))
+        resp = client.post("/chat", json={"query": "fee?"})
+        assert resp.json()["answer"] == UNAVAILABLE_MESSAGE
+        assert resp.json()["source_url"] is None
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Category-aware (taxonomy) behaviour

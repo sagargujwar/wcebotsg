@@ -19,6 +19,8 @@ from sentence_transformers import SentenceTransformer
 
 from app.categories import Category, boost_for
 from app.config import get_settings
+from app.people import find_person_chunks
+from app.syllabus import find_syllabus_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +211,17 @@ class ChromaRetriever:
 
         query_embedding = self._encoder.encode(query, normalize_embeddings=True).tolist()
 
+        # Targeted document lookups: when the query names an individual, pull
+        # their own resume/profile to the front; when it names a branch
+        # syllabus ("third year syllabus for cse"), pull that document's
+        # course-content chunks.  Without this, a name lives only in
+        # aggregate tables (AISHE/NIRF) and a syllabus only behind shared
+        # assessment boilerplate — both outrank the dedicated document, so
+        # the model answers from — and links — the wrong source.
+        targeted = find_person_chunks(self._collection, query)
+        if not targeted:
+            targeted = find_syllabus_chunks(self._collection, query)
+
         # Over-fetch, then assemble_results category-boosts near-relevant
         # matches and _rerank_chunks drops header/footer stubs and caps
         # per-source repeats so the LLM sees diverse, content-bearing chunks.
@@ -237,6 +250,15 @@ class ChromaRetriever:
                     "category": meta.get("category", ""),
                     "score": score,
                 }
+            )
+
+        if targeted:
+            seen = {c["source_url"] for c in targeted}
+            chunks = targeted + [c for c in chunks if c["source_url"] not in seen]
+            logger.info(
+                "Doc targeting: %d chunk(s) from %s",
+                len(targeted),
+                targeted[0]["source_url"],
             )
 
         return assemble_results(chunks, top_k, category)
