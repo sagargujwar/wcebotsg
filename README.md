@@ -91,11 +91,14 @@ college-rag-chatbot/
 │   │   ├── syllabus.html      # Mock syllabus page
 │   │   ├── fee_structure.pdf  # Generated test PDF (run generate_fixtures.py)
 │   │   └── generate_fixtures.py
-│   ├── eval/queries.jsonl     # 79 labelled queries for the eval harness
+│   ├── eval/queries.jsonl     # 86 labelled queries for the eval harness
 │   ├── conftest.py
 │   ├── test_scraper.py
 │   ├── test_retrieval.py
 │   ├── test_intent.py
+│   ├── test_senses.py
+│   ├── test_people.py
+│   ├── test_syllabus.py
 │   ├── test_eval_set.py
 │   ├── test_social.py
 │   ├── test_cors.py
@@ -365,7 +368,7 @@ out-of-scope queries declined (see §11).
 pytest tests/ -v
 ```
 
-360 tests — all passing, without any real API keys or a running Redis instance.
+361 tests — all passing, without any real API keys or a running Redis instance.
 The `test_pdf_text_extracted` and `test_missing_content_type_sniffs_pdf` tests are
 automatically skipped if the PDF fixture hasn't been generated.
 
@@ -373,7 +376,10 @@ To run a specific test file:
 ```bash
 pytest tests/test_chat_api.py -v
 pytest tests/test_intent.py -v      # query-taxonomy classifier
+pytest tests/test_senses.py -v      # context-meaning (word-sense) re-rank
 pytest tests/test_retrieval.py -v
+pytest tests/test_people.py -v
+pytest tests/test_syllabus.py -v
 pytest tests/test_scraper.py -v
 pytest tests/test_social.py -v
 pytest tests/test_cors.py -v

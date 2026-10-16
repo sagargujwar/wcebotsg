@@ -458,6 +458,43 @@ class TestChatEndpoint:
         resp = client.post("/chat", json={"query": "how much is tuition?"})
         assert resp.json()["source_url"] == "http://test.edu/fees"
 
+    def test_no_grounding_fallback_follows_list_order_not_score(self):
+        """With no citation and no lexical grounding, the link is the chunk
+        the model read *first* — the list order already carries the
+        context-meaning re-rank, which promotes a chunk without touching its
+        score.  Re-deriving the winner from max(score) would disagree with
+        the ordering the answer was grounded in."""
+        promoted_first = {
+            "text": (
+                "Course Code 7CS301 Course Name Compiler Design Credits 4. "
+                "Course Contents: parsing, lexing, code generation. "
+            )
+            * 4,
+            "source_url": "http://test.edu/syllabus.pdf",
+            "doc_type": "pdf",
+            "title": "TY CSE Syllabus",
+            "score": 0.78,  # lower raw score, but read first
+            "category": "academics",
+        }
+        higher_score_second = {
+            "text": "Annual report mentions the word syllabus often. " * 4,
+            "source_url": "http://test.edu/annual-report.pdf",
+            "doc_type": "pdf",
+            "title": "Annual Report",
+            "score": 0.84,  # higher raw score, but read second
+            "category": "academics",
+        }
+        paraphrase = "The prescribed course of study is published by the institute."
+        client = _make_client(
+            retriever=_make_mock_retriever(
+                chunks=[promoted_first, higher_score_second]
+            ),
+            llm=_make_mock_llm(answer=paraphrase),
+            intent=_make_mock_intent(_intent_for(Category.ACADEMICS)),
+        )
+        resp = client.post("/chat", json={"query": "syllabus"})
+        assert resp.json()["source_url"] == "http://test.edu/syllabus.pdf"
+
     def test_unavailable_message_has_no_source_url(self):
         """An LLM outage message must not carry a document link."""
         from app.constants import UNAVAILABLE_MESSAGE

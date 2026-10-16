@@ -5,7 +5,7 @@
 - **Backend:** FastAPI + ChromaDB + Redis + Gemini/Groq
 - **Frontend:** single-file vanilla HTML/CSS/JS (`frontend/index.html`) + floating widget loader (`frontend/widget.js`)
 - **Query taxonomy:** every query is classified (academics, admissions, notices, …) and the category steers retrieval, gating, and the LLM rubric — measured by `scripts/eval_accuracy.py`
-- **Tests:** 360 pytest tests, all mocked (no API keys / Redis / real site needed)
+- **Tests:** 361 pytest tests, all mocked (no API keys / Redis / real site needed)
 
 ---
 
@@ -42,20 +42,20 @@ Two decoupled halves: the **knowledge base (KB)** is built offline by `scripts/r
 
 ## 2. Request lifecycle (`POST /chat`)
 
-Implemented in `app/main.py:150` — the docstring enumerates the same 8 steps:
+Implemented in `app/main.py:255` — the docstring enumerates the same 8 steps:
 
 | # | Step | Module | Detail |
 |---|---|---|---|
 | 1 | Validate input | `app/models.py:15` | Pydantic strips, rejects empty and >500-char queries (422) |
-| 2 | Rate limit | `app/main.py:104`, `app/cache.py:100` | Per client IP, `20 req / 60 s`, honors `X-Forwarded-For`; returns 429 + `Retry-After` |
+| 2 | Rate limit | `app/main.py:105`, `app/cache.py:100` | Per client IP, `20 req / 60 s`, honors `X-Forwarded-For`; returns 429 + `Retry-After` |
 | 3 | Cache lookup | `app/cache.py:75` | SHA-256 of the normalized query; hit returns with `cached: true` (a defensive re-clear of `source_url` still guards any legacy cached refusal); the payload carries the `category` it was answered with |
-| 4 | Rewrite + classify | `app/main.py:178`, `app/categories.py:584`, `app/intent.py:145` | Abbreviation expansion (e.g. `ntc` → `notice`) for the embedding query only; the hybrid classifier predicts a taxonomy category (`rules 0.45 + seed-query prototypes 0.55`, `MIN_SCORE=0.34`, `MIN_MARGIN=0.05`) or falls back to `general` |
-| 5 | Vector search + gate | `app/retrieval.py:181`, `app/main.py:197` | Chroma candidate pool (top_k × 10, max 100) reranked to top_k=6 (`score = 1 − distance/2`); when the query is classified, same-category chunks get a small relevance-banded boost (`assemble_results`, `app/retrieval.py:102`); a **live YouTube RSS chunk** (score 1.0) is appended when the query looks video-related (`app/social.py`); best score below the **per-category gate** (`threshold_for`, default 0.35) → exact refusal, no LLM call (`app/main.py:213`) |
-| 6 | LLM generation | `app/llm.py:142`, `app/main.py:224` | Grounded prompt + the category's **rubric** (`app/llm.py:74`); **Gemini (single attempt, 25 s hard timeout via ThreadPoolExecutor) → Groq (15 s) → graceful "service unavailable"**; never raises. The prompt forbids guessing — out-of-scope replies must be the same exact refusal |
-| 7 | Source injection | `app/main.py:229` | Suppressed when the answer is a refusal (`_is_no_info`); otherwise the highest-scoring chunk with a non-empty `source_url` wins — preferring chunks of the predicted category — and the UI labels it **View Document** |
-| 8 | Cache + return | `app/main.py:246` | **Only real answers are cached 24 h** — refusals and service-unavailable errors are never written, so an improved KB/LLM is not masked by a stale "no info" |
+| 4 | Rewrite + classify | `app/main.py:289`, `app/categories.py:591`, `app/intent.py:145` | Abbreviation expansion (e.g. `ntc` → `notice`) for the embedding query only; the hybrid classifier predicts a taxonomy category (`rules 0.45 + seed-query prototypes 0.55`, `MIN_SCORE=0.34`, `MIN_MARGIN=0.05`) or falls back to `general` |
+| 5 | Vector search + gate | `app/retrieval.py:236`, `app/main.py:307`, `app/main.py:320` | Chroma candidate pool (top_k × 10, max 100) reranked to top_k=6 (`score = 1 − distance/2`); when the query is classified, same-category chunks get a small relevance-banded boost (`assemble_results`, `app/retrieval.py:104`), then the context-meaning re-rank re-orders the finished list (`apply_sense_rerank`, `app/retrieval.py:157`); a **live YouTube RSS chunk** (score 1.0) is appended when the query looks video-related (`app/social.py`); best score below the **per-category gate** (`threshold_for`, default 0.35) → exact refusal, no LLM call |
+| 6 | LLM generation | `app/llm.py:142`, `app/main.py:334` | Grounded prompt + the category's **rubric** (`app/llm.py:74`); **Gemini (single attempt, 25 s hard timeout via ThreadPoolExecutor) → Groq (15 s) → graceful "service unavailable"**; never raises. The prompt forbids guessing — out-of-scope replies must be the same exact refusal |
+| 7 | Source injection | `app/main.py:192` | Suppressed when the answer is a refusal (`_is_no_info`); otherwise the link follows what the model actually read: the LLM's own citation if it names a chunk URL, else the chunk with the most lexical grounding in the answer, else the first chunk of the predicted category **in list order** — retrieval order already carries the category boost and the context-meaning re-rank, so the link cannot disagree with the ordering the answer came from — and the UI labels it **View Document** |
+| 8 | Cache + return | `app/main.py:358` | **Only real answers are cached 24 h** — refusals and service-unavailable errors are never written, so an improved KB/LLM is not masked by a stale "no info" |
 
-`GET /health` (`app/main.py:247`) reports `chroma_ok` + `redis_ok` → `ok` or `degraded`. Interactive docs at `GET /docs` (Swagger). Embeddable widget assets: `GET /widget` (iframe panel, `app/main.py:216`) and `GET /widget.js` (floating-button loader, `app/main.py:226`).
+`GET /health` (`app/main.py:397`) reports `chroma_ok` + `redis_ok` → `ok` or `degraded`. Interactive docs at `GET /docs` (Swagger). Embeddable widget assets: `GET /widget` (iframe panel, `app/main.py:371`) and `GET /widget.js` (floating-button loader, `app/main.py:381`).
 
 ---
 
@@ -182,7 +182,7 @@ filenames map via the title lexicon).
 ### How the category is used at query time
 
 1. **Retrieval** — `search(query, category=…)` → `assemble_results`
-   (`app/retrieval.py:102`) adds a *relevance-banded* boost to chunks whose
+   (`app/retrieval.py:104`) adds a *relevance-banded* boost to chunks whose
    `category` matches, relative to the pool's best score (so it re-orders
    near-tied candidates, never injects junk). If no matching chunk would
    survive the top-k, a corroboration fallback keeps the plain baseline rerank.
@@ -193,9 +193,10 @@ filenames map via the title lexicon).
    global 0.35 gate per category (e.g. `notices_events` = 0.30).
 3. **Prompt** — the spec's rubric is injected as a `{rubric}` block
    (`app/llm.py:74`): category-specific guardrails and evidence expectations.
-4. **Source & cache** — chunks of the predicted category are preferred when
-   picking the cited `source_url` (`app/main.py:237`), and the response/cache
-   payload carries `category`.
+4. **Source & cache** — the link follows what the model read: the LLM's own
+   citation, else the most lexically grounded chunk, else the predicted
+   category's first chunk in list order (`app/main.py:192`), and the
+   response/cache payload carries `category`.
 5. **UI** — the frontend renders a 🏷 chip with the category label (never on
    refusals) next to the cached/time badges.
 
@@ -285,7 +286,7 @@ wcebot/
 ├── frontend/
 │   ├── index.html        # the entire UI (standalone page + widget iframe panel)
 │   └── widget.js         # floating-button embed loader
-├── tests/                # 360 tests (chat API, taxonomy, sense layer, people,
+├── tests/                # 361 tests (chat API, taxonomy, sense layer, people,
 │   │                     #   syllabus targeting, eval set, CORS, retrieval,
 │   │                     #   scraper, social) + fixtures
 │   └── eval/queries.jsonl  # 86 labelled queries for scripts/eval_accuracy.py
@@ -305,7 +306,7 @@ wcebot/
 | `GEMINI_API_KEY` / `GROQ_API_KEY` | empty | LLM providers (either one is enough; both = redundancy) |
 | `REDIS_URL` | `redis://localhost:6379/0` | answer cache + rate limiting |
 | `BASE_URL` | target college site | crawl seed |
-| `MAX_CRAWL_DEPTH` | `3` in `.env` (`2` in config default) | link-hops to crawl |
+| `MAX_CRAWL_DEPTH` | `3` | link-hops to crawl (`.env` overrides; also `3`) |
 | `MAX_PAGES` | `20000` | crawl safety cap (documents, 0 = unlimited) |
 | `SSL_CA_BUNDLE` | `./certs/ca-bundle.pem` | required for the target site's TLS chain |
 | `CHROMA_PATH` / `PDF_DOWNLOAD_PATH` | `./data/chroma_db`, `./data/pdfs` | storage |
@@ -336,7 +337,7 @@ uvicorn app.main:app --reload     # backend on :8000
 # open frontend/index.html in a browser (file:// works — CORS allows Origin: null)
 # optional: python scripts/demo_proxy.py → http://localhost:9000 (college site + widget)
 
-pytest tests/ -v                                    # 360 tests
+pytest tests/ -v                                    # 361 tests
 python scripts/eval_accuracy.py --out docs/eval-report.md   # taxonomy evaluation
 ```
 
@@ -346,9 +347,9 @@ Schedule KB refreshes with cron (Linux/macOS) or Task Scheduler (Windows) — se
 
 ## 9. Testing strategy
 
-`pytest` runs **360 tests** with *everything external mocked* — no Redis, no Chroma, no LLM keys, no network:
+`pytest` runs **361 tests** with *everything external mocked* — no Redis, no Chroma, no LLM keys, no network:
 
-- `tests/test_chat_api.py` (42) — happy path, validation (422s), similarity-threshold fallback, cache hit/miss, rate limiting (429), source URL injection, **exact refusal + `source_url: null`**, refusals never cached, **category-aware behaviour** (response category, per-category gate, rubric passing, source preference, cached category)
+- `tests/test_chat_api.py` (43) — happy path, validation (422s), similarity-threshold fallback, cache hit/miss, rate limiting (429), source URL injection, **exact refusal + `source_url: null`**, refusals never cached, **category-aware behaviour** (response category, per-category gate, rubric passing, source preference, cached category)
 - `tests/test_intent.py` (35) — taxonomy specs, lexicon/URL rules, abbreviation expansion, prototype round-trips, confidence gates
 - `tests/test_senses.py` (79) — context-meaning layer: trigger detection, phrase matching, and `apply_sense_rerank` (promotes the document that *is* the thing; scores, membership and targeted chunks untouched)
 - `tests/test_eval_set.py` (6) — schema validation of `tests/eval/queries.jsonl` (size, categories, ids, sources)

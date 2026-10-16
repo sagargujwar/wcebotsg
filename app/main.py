@@ -145,7 +145,9 @@ def _is_no_info(answer: str) -> bool:
 # member's resume routinely outranks the record the facts came from (same
 # layout, shared co-authorship lines), which sent students to someone else's
 # profile.  Preference order: LLM-cited URL → lexical grounding of the answer
-# in each chunk → retrieval score / category (the original behaviour).
+# in each chunk → the predicted category's first chunk in list order (the
+# list is sorted by retrieval score, adjusted by the context-meaning
+# re-rank, so "first" is what the model read first).
 _CONTENT_TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
 _URL_RE = re.compile(r"https?://[^\s)\]>\"']+")
 
@@ -197,7 +199,10 @@ def _pick_source_url(answer: str, chunks: list, intent: IntentResult) -> Optiona
        actually contains; the best-supported chunk is the one the facts came
        from (category and retrieval score break ties).
     3. When nothing is well supported (heavy paraphrase, no overlap), fall
-       back to the original category-then-score ranking.
+       back to list order within the predicted category: the list arrives in
+       the order the model read it — retrieval score, then the
+       context-meaning re-rank — so the first chunk is the one the answer
+       was most likely grounded in.
     """
     with_url = [c for c in chunks if c.get("source_url")]
     if not with_url:
@@ -223,14 +228,18 @@ def _pick_source_url(answer: str, chunks: list, intent: IntentResult) -> Optiona
 
             return max(with_url, key=rank).get("source_url") or None
 
+    # The list reaches the model in retrieval order (score, adjusted by the
+    # context-meaning re-rank) with social chunks appended last — so its
+    # first same-category entry is what the model read first.  Picking by
+    # max(score) instead would re-derive a winner the re-rank deliberately
+    # did not move: a promoted chunk's score is unchanged, so the link could
+    # disagree with the ordering the answer was grounded in.
     same_category = (
         [c for c in with_url if c.get("category") == intent.category.value]
         if intent.is_specific
         else []
     )
-    top_chunk = max(
-        same_category or with_url, key=lambda c: c.get("score", 0.0)
-    )
+    top_chunk = (same_category or with_url)[0]
     return top_chunk.get("source_url") or None
 
 

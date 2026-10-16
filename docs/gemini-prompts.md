@@ -350,6 +350,6 @@ Strategy A never approaches the output cap (edits ≤200 lines each). Strategy B
 ## Verification (after any strategy)
 
 1. `node --check` on the extracted `<script>` block
-2. `pytest -q` → expect **117 passed** (backend must be untouched)
+2. `pytest -q` → all green (the backend must be untouched — it was **117 passed** when these prompts were written; the suite has since grown to 361 as the backend gained features, so treat a *decrease* as the regression signal, not the exact count)
 3. Open `frontend/index.html` via `file://` with the `uvicorn --reload` server running, then test: send message, timestamp shown, Copy, Retry, Clear chat, char counter (warn/full), skeleton loader, cached + response-time badges, mobile width
 4. `git diff --stat` — only `frontend/index.html` should appear (no commit unless asked)
